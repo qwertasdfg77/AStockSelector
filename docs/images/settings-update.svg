@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="840" viewBox="0 0 420 840" role="img" aria-label="设置和更新页面示意图">
+  <rect width="420" height="840" rx="36" fill="#14532d"/>
+  <rect x="18" y="20" width="384" height="800" rx="28" fill="#f8fafc"/>
+  <text x="42" y="74" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">设置</text>
+  <g font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif">
+    <rect x="42" y="104" width="336" height="112" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="60" y="134" font-size="16" font-weight="700" fill="#111827">筛选参数</text>
+    <text x="60" y="164" font-size="14" fill="#475569">年线附近范围：5%</text>
+    <line x1="60" y1="188" x2="338" y2="188" stroke="#cbd5e1" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="176" cy="188" r="14" fill="#16a34a"/>
+    <rect x="42" y="238" width="336" height="112" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="60" y="268" font-size="16" font-weight="700" fill="#111827">最低成交额</text>
+    <text x="60" y="298" font-size="14" fill="#475569">5000 万 · 每次调整 1000 万</text>
+    <line x1="60" y1="322" x2="338" y2="322" stroke="#cbd5e1" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="150" cy="322" r="14" fill="#16a34a"/>
+    <rect x="42" y="386" width="336" height="58" rx="29" fill="#16a34a"/>
+    <text x="210" y="422" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">智能更新并筛选</text>
+    <rect x="42" y="466" width="336" height="58" rx="29" fill="#0ea5e9"/>
+    <text x="210" y="502" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">检测程序更新</text>
+    <rect x="42" y="548" width="336" height="94" rx="14" fill="#f0fdf4" stroke="#bbf7d0"/>
+    <text x="60" y="578" font-size="15" font-weight="700" fill="#166534">后台读取</text>
+    <text x="60" y="607" font-size="13" fill="#166534">前台服务 + WakeLock</text>
+    <text x="60" y="630" font-size="13" fill="#166534">显示进度、成功数、失败数和剩余时间</text>
+  </g>
+</svg>

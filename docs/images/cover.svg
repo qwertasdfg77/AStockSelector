@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="AStockSelector 项目封面">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="0.55" stop-color="#155e75"/>
+      <stop offset="1" stop-color="#166534"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g transform="translate(92 88)">
+    <text x="0" y="54" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="52" font-weight="700" fill="#f8fafc">AStockSelector</text>
+    <text x="0" y="104" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="27" fill="#d1fae5">面向中文用户的 Android A 股策略选股器</text>
+    <text x="0" y="166" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="22" fill="#e2e8f0">本地缓存 · 智能更新 · 四个预设战法 · 自定义筛选 · GitHub 更新检测</text>
+    <g transform="translate(0 230)">
+      <rect x="0" y="0" width="170" height="44" rx="22" fill="#22c55e"/>
+      <text x="85" y="29" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="18" font-weight="700" fill="#052e16">下载 APK</text>
+      <rect x="190" y="0" width="170" height="44" rx="22" fill="#f8fafc"/>
+      <text x="275" y="29" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="18" font-weight="700" fill="#0f172a">查看规则</text>
+      <rect x="380" y="0" width="170" height="44" rx="22" fill="#0ea5e9"/>
+      <text x="465" y="29" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="18" font-weight="700" fill="#f0f9ff">开源共建</text>
+    </g>
+    <g transform="translate(0 338)" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="18" fill="#cbd5e1">
+      <text x="0" y="0">年线首板</text>
+      <text x="118" y="0">九阳蓄势</text>
+      <text x="236" y="0">博弈K</text>
+      <text x="330" y="0">低位启动</text>
+    </g>
+  </g>
+  <g transform="translate(820 74)" filter="url(#shadow)">
+    <rect x="0" y="0" width="318" height="492" rx="34" fill="#020617"/>
+    <rect x="18" y="20" width="282" height="452" rx="24" fill="#f8fafc"/>
+    <rect x="42" y="50" width="120" height="9" rx="4" fill="#cbd5e1"/>
+    <text x="42" y="96" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">今日信号</text>
+    <rect x="42" y="118" width="230" height="38" rx="19" fill="#dcfce7"/>
+    <text x="58" y="143" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="15" fill="#166534">智能更新完成：命中 18 只</text>
+    <g font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif">
+      <rect x="42" y="178" width="230" height="70" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="56" y="192" width="30" height="20" rx="10" fill="#dc2626"/>
+      <text x="71" y="207" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">新</text>
+      <text x="96" y="207" font-size="16" font-weight="700" fill="#111827">示例股票 600000</text>
+      <text x="56" y="232" font-size="13" fill="#475569">低位启动 · 评分 92</text>
+      <rect x="42" y="260" width="230" height="70" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
+      <text x="56" y="288" font-size="16" font-weight="700" fill="#111827">九阳蓄势 + 博弈K</text>
+      <text x="56" y="313" font-size="13" fill="#475569">多策略命中自动合并</text>
+      <rect x="42" y="342" width="230" height="70" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
+      <text x="56" y="370" font-size="16" font-weight="700" fill="#111827">年线首板</text>
+      <text x="56" y="395" font-size="13" fill="#475569">近涨停 · 靠近 MA250</text>
+    </g>
+  </g>
+</svg>

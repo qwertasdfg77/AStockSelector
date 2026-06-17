@@ -4,6 +4,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseSigningEnabled = listOf(
+    "ANDROID_KEYSTORE_FILE",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+).all { !System.getenv(it).isNullOrBlank() }
+
 android {
     namespace = "com.codex.astockselector"
     compileSdk = 35
@@ -14,6 +21,26 @@ android {
         targetSdk = 35
         versionCode = 13
         versionName = "0.2.1"
+    }
+
+    signingConfigs {
+        if (releaseSigningEnabled) {
+            create("release") {
+                storeFile = file(System.getenv("ANDROID_KEYSTORE_FILE"))
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (releaseSigningEnabled) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     buildFeatures {
