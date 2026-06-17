@@ -1,0 +1,38 @@
+name: Bug 反馈
+description: 报告 App 使用或数据更新问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明发生了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请按步骤写出如何复现。
+      placeholder: |
+        1. 打开 App
+        2. 点击智能更新并筛选
+        3. 出现错误
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 手机与系统
+      placeholder: 小米 / OPPO / vivo / 华为，Android 版本
+  - type: input
+    id: app_version
+    attributes:
+      label: App 版本
+      placeholder: 0.2.1
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误信息
+      description: 请粘贴界面提示或日志。不要粘贴 Token。

@@ -1,0 +1,43 @@
+# Android / Gradle
+.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# APK / bundles / signing
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
+keystore.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Kotlin / Java
+*.class
+
+# Local cache and generated app data
+market_cache.db
+*.db
+*.db-shm
+*.db-wal
+
+# OS / temp
+.DS_Store
+Thumbs.db
+tmp/
+*.log
+
+# Do not publish personal tokens or local-only configs
+*.env
+*.env.*
+secrets.properties

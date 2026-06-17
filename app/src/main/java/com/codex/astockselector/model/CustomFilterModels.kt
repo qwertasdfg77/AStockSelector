@@ -1,0 +1,106 @@
+package com.codex.astockselector.model
+
+enum class CustomConditionMode(val title: String) {
+    Off("关闭"),
+    Required("必须"),
+    Score("加分"),
+}
+
+enum class CustomMatchMode(val title: String) {
+    All("全部满足"),
+    Any("任意满足"),
+}
+
+enum class CustomScheme(val title: String) {
+    Default("默认方案"),
+    Mine1("我的方案 1"),
+    Mine2("我的方案 2"),
+}
+
+data class CustomFilterConfig(
+    val scheme: CustomScheme = CustomScheme.Default,
+    val matchMode: CustomMatchMode = CustomMatchMode.All,
+    val baseExcludeSt: Boolean = true,
+    val baseMinAmount: Double = 50_000_000.0,
+    val baseMinBars: Int = 260,
+
+    val trendCloseAboveMa: CustomConditionMode = CustomConditionMode.Required,
+    val trendMa250FlatUp: CustomConditionMode = CustomConditionMode.Score,
+    val trendBullAlignment: CustomConditionMode = CustomConditionMode.Score,
+    val trendBreakHigh: CustomConditionMode = CustomConditionMode.Off,
+    val trendMaPeriod: Int = 250,
+    val trendDays: Int = 5,
+    val trendHighDays: Int = 60,
+    val trendRequireMaUp: Boolean = false,
+
+    val momentumTodayRise: CustomConditionMode = CustomConditionMode.Off,
+    val momentumPeriodRise: CustomConditionMode = CustomConditionMode.Score,
+    val momentumConsecutiveRise: CustomConditionMode = CustomConditionMode.Off,
+    val momentumNewHigh: CustomConditionMode = CustomConditionMode.Off,
+    val momentumReboundRepair: CustomConditionMode = CustomConditionMode.Off,
+    val momentumTodayPctMin: Double = 3.0,
+    val momentumRiseDays: Int = 10,
+    val momentumRiseMinPct: Double = 0.0,
+    val momentumRiseMaxPct: Double = 25.0,
+    val momentumConsecutiveDays: Int = 3,
+    val momentumHighDays: Int = 20,
+    val momentumReboundRatio: Double = 0.60,
+
+    val volumeMinAmount: CustomConditionMode = CustomConditionMode.Required,
+    val volumeAboveAverage: CustomConditionMode = CustomConditionMode.Score,
+    val volumeRiseWithVolume: CustomConditionMode = CustomConditionMode.Off,
+    val volumeShrinkPullback: CustomConditionMode = CustomConditionMode.Off,
+    val volumeMinAmountValue: Double = 50_000_000.0,
+    val volumeAverageDays: Int = 5,
+    val volumeMultiplier: Double = 1.20,
+
+    val patternYangBaoYin: CustomConditionMode = CustomConditionMode.Off,
+    val patternBearThenBull: CustomConditionMode = CustomConditionMode.Off,
+    val patternLongLowerShadow: CustomConditionMode = CustomConditionMode.Off,
+    val patternBigBull: CustomConditionMode = CustomConditionMode.Off,
+    val patternSmallRange: CustomConditionMode = CustomConditionMode.Off,
+    val patternGapUp: CustomConditionMode = CustomConditionMode.Off,
+    val patternBodyRatio: CustomConditionMode = CustomConditionMode.Off,
+    val patternBodyMinRatio: Double = 0.50,
+    val patternLowerShadowMinRatio: Double = 0.35,
+    val patternUpperShadowMaxRatio: Double = 0.30,
+    val patternBigBullPct: Double = 5.0,
+    val patternSmallDays: Int = 5,
+    val patternSmallAmplitudePct: Double = 4.0,
+    val patternRequireBull: Boolean = true,
+    val patternCloseHighRatio: Double = 0.70,
+
+    val maNear: CustomConditionMode = CustomConditionMode.Required,
+    val ma60Near: CustomConditionMode = CustomConditionMode.Off,
+    val maPullbackHold: CustomConditionMode = CustomConditionMode.Score,
+    val maCrossUp: CustomConditionMode = CustomConditionMode.Off,
+    val maConverge: CustomConditionMode = CustomConditionMode.Off,
+    val maPeriod: Int = 250,
+    val maNearPct: Double = 0.05,
+    val maRequireAbove: Boolean = true,
+    val maRequireCrossToday: Boolean = false,
+    val maConvergePct: Double = 0.03,
+
+    val limitNear: CustomConditionMode = CustomConditionMode.Off,
+    val limitFirstBoard: CustomConditionMode = CustomConditionMode.Off,
+    val limitNoRecent: CustomConditionMode = CustomConditionMode.Off,
+    val limitBoardCount: CustomConditionMode = CustomConditionMode.Off,
+    val limitNotOneWord: CustomConditionMode = CustomConditionMode.Off,
+    val limitNoBrokenBoard: CustomConditionMode = CustomConditionMode.Off,
+    val limitNearRatio: Double = 0.90,
+    val limitLookbackDays: Int = 20,
+    val limitBoardCountValue: Int = 1,
+    val limitExcludeSt: Boolean = true,
+    val limitExcludeOneWord: Boolean = true,
+
+    val volatilityTodayAmplitude: CustomConditionMode = CustomConditionMode.Off,
+    val volatilityNarrowing: CustomConditionMode = CustomConditionMode.Off,
+    val volatilityMaxDrawdown: CustomConditionMode = CustomConditionMode.Off,
+    val volatilityVolumeWave: CustomConditionMode = CustomConditionMode.Off,
+    val volatilityQuietBreakout: CustomConditionMode = CustomConditionMode.Off,
+    val volatilityMinAmplitudePct: Double = 0.0,
+    val volatilityMaxAmplitudePct: Double = 8.0,
+    val volatilityDays: Int = 10,
+    val volatilityMaxDrawdownPct: Double = 12.0,
+    val volatilityRequireBreakout: Boolean = true,
+)
