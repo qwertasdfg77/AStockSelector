@@ -1,0 +1,32 @@
+name: 数据源问题
+description: 股票列表、K 线、缓存更新或网络读取失败
+title: "[数据源] "
+labels: ["数据源"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 请说明哪个步骤失败，以及界面提示。
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: 可能相关的数据源
+      options:
+        - 新浪
+        - 腾讯
+        - 不确定
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: 发生日期
+      placeholder: 2026-06-18
+  - type: textarea
+    id: detail
+    attributes:
+      label: 补充信息
+      description: 可以贴更新进度、失败股票数量或错误提示。不要粘贴 Token。

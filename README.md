@@ -22,6 +22,7 @@
 - 策略规则：[docs/strategy-rules.md](docs/strategy-rules.md)
 - 数据源说明：[docs/data-sources.md](docs/data-sources.md)
 - 正式签名 APK：[docs/signing-release.md](docs/signing-release.md)
+- 真实截图采集：[docs/screenshots.md](docs/screenshots.md)
 
 ## 界面预览
 
@@ -31,7 +32,7 @@
 
 ![使用流程](docs/images/demo-flow.svg)
 
-> 上方图片是项目展示用渲染图，用于说明界面结构和功能入口；实际股票结果以 App 实时读取和本地缓存筛选为准。
+> 上方图片是项目展示用渲染图，用于说明界面结构和功能入口；真实手机截图可按 [docs/screenshots.md](docs/screenshots.md) 采集后补充。实际股票结果以 App 实时读取和本地缓存筛选为准。
 
 ## 项目特点
 
@@ -143,6 +144,7 @@ App 内“检测程序更新”会读取：
 - [策略规则](docs/strategy-rules.md)
 - [数据源说明](docs/data-sources.md)
 - [正式签名 APK](docs/signing-release.md)
+- [真实截图采集](docs/screenshots.md)
 - [开发路线图](ROADMAP.md)
 - [免责声明](DISCLAIMER.md)
 - [隐私说明](PRIVACY.md)

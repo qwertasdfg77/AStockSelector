@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -62,6 +63,13 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleRelease
 
+      - name: Verify signed release APK
+        if: env.SIGNING_ENABLED == 'true'
+        shell: bash
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk > release-signing-report.txt
+
       - name: Collect APK files
         shell: bash
         run: |
@@ -70,10 +78,28 @@ jobs:
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
             cp app/build/outputs/apk/release/app-release.apk "release-files/AStockSelector-${GITHUB_REF_NAME}-release.apk"
           fi
+          if [ -f release-signing-report.txt ]; then
+            cp release-signing-report.txt release-files/release-signing-report.txt
+          fi
+          {
+            echo "Project: AStockSelector"
+            echo "Version tag: ${GITHUB_REF_NAME}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Build time UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Signing enabled: ${SIGNING_ENABLED}"
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > release-files/BUILD_INFO.txt
           cd release-files
           sha256sum *.apk > SHA256SUMS.txt
 
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: astockselector-apk-${{ github.ref_name }}
+          path: release-files/*
+
       - name: Upload APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: release-files/*

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安装说明
+    url: https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/install.md
+    about: 安装 APK 前请先查看这里。
+  - name: 常见问题
+    url: https://github.com/qwertasdfg77/AStockSelector/blob/main/FAQ.md
+    about: 没有数据、更新慢、无命中等常见问题。

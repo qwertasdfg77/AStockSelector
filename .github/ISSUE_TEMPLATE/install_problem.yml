@@ -1,0 +1,29 @@
+name: 安装问题
+description: APK 下载、安装、启动失败
+title: "[安装] "
+labels: ["安装问题"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 请说明安装或启动时看到的提示。
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号和系统版本
+      placeholder: 例如：小米 14 / Android 15
+    validations:
+      required: true
+  - type: input
+    id: apk
+    attributes:
+      label: APK 文件名
+      placeholder: 例如：AStockSelector-0.2.1-debug.apk
+  - type: textarea
+    id: tried
+    attributes:
+      label: 已尝试的方法
+      placeholder: 重新下载、允许未知来源、卸载旧版本等

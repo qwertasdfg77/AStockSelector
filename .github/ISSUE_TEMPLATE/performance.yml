@@ -1,0 +1,26 @@
+name: 性能问题
+description: 更新缓存或本地筛选耗时过长
+title: "[性能] "
+labels: ["性能优化"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 请说明慢在哪里，是联网更新、写入缓存还是本地筛选。
+    validations:
+      required: true
+  - type: input
+    id: duration
+    attributes:
+      label: 大约耗时
+      placeholder: 例如：更新 20 日数据用了 15 分钟
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号和系统版本
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 可以贴进度文字、命中数量、网络环境等。

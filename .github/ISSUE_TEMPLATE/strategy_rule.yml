@@ -1,0 +1,30 @@
+name: 策略规则建议
+description: 调整战法、阈值、筛选条件或命中说明
+title: "[策略] "
+labels: ["策略规则"]
+body:
+  - type: dropdown
+    id: strategy
+    attributes:
+      label: 相关战法
+      options:
+        - 年线首板
+        - 九阳蓄势
+        - 博弈K
+        - 低位启动
+        - 自定义筛选
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议规则
+      description: 请写清楚需要新增、放宽或收紧的条件。
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: 理由和样例
+      description: 如果有股票代码、日期或反例，请写在这里。

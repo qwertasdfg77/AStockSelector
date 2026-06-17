@@ -68,7 +68,20 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 1. 构建 debug APK。
 2. 如果 secrets 完整，解码 keystore。
 3. 构建正式签名 release APK。
-4. 把 APK 和 SHA256 文件上传到对应 GitHub Release。
+4. 校验 release APK 签名并生成签名报告。
+5. 把 APK、SHA256、构建信息和签名报告上传到对应 GitHub Release。
+
+## Release 附件说明
+
+自动发布后通常会看到这些文件：
+
+- `AStockSelector-v版本-debug.apk`：调试包，适合测试。
+- `AStockSelector-v版本-release.apk`：正式签名包，只有 secrets 完整时生成。
+- `SHA256SUMS.txt`：APK 校验值。
+- `BUILD_INFO.txt`：构建时间、提交、签名状态和 Actions 链接。
+- `release-signing-report.txt`：正式签名 APK 的证书校验报告。
+
+普通用户优先安装 `release.apk`。如果没有 `release.apk`，说明当前版本还没有配置正式签名密钥。
 
 ## 发布 tag 示例
 
