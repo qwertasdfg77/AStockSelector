@@ -29,17 +29,25 @@ updates:
       # Keep dependency suggestions compatible with the current Android baseline:
       # compileSdk 35, Android Gradle Plugin 8.7.x, and Gradle 8.9.
       - dependency-name: "com.android.application"
-        versions: [">= 9"]
+        versions: [">=8.13.0"]
+      - dependency-name: "org.jetbrains.kotlin.android"
+        versions: [">=2.4.0"]
+      - dependency-name: "org.jetbrains.kotlin.plugin.compose"
+        versions: [">=2.4.0"]
+      - dependency-name: "androidx.compose:compose-bom"
+        versions: [">=2026.06.00"]
       - dependency-name: "androidx.activity:*"
-        versions: [">= 1.13"]
+        versions: [">=1.12.0"]
       - dependency-name: "androidx.core:*"
-        versions: [">= 1.19"]
+        versions: [">=1.18.0"]
       - dependency-name: "androidx.lifecycle:*"
-        versions: [">= 2.11"]
+        versions: [">=2.10.0"]
+      - dependency-name: "androidx.work:*"
+        versions: [">=2.11.0"]
       - dependency-name: "com.squareup.okhttp3:*"
-        versions: [">= 5"]
+        versions: [">=5.0.0"]
       - dependency-name: "com.squareup.retrofit2:*"
-        versions: [">= 3"]
+        versions: [">=3.0.0"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
