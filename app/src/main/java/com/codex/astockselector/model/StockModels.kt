@@ -1,5 +1,8 @@
 package com.codex.astockselector.model
 
+import java.util.Locale
+import kotlin.math.roundToInt
+
 data class StockProfile(
     val tsCode: String,
     val name: String,
@@ -70,3 +73,36 @@ data class RuleCheck(
     val label: String,
     val passed: Boolean,
 )
+
+const val SIGNAL_RULE_VERSION = "20260616_low_level_start_v1"
+
+fun StrategyConfig.strategyRuleKey(): String =
+    listOf(
+        "rules=$SIGNAL_RULE_VERSION",
+        "nearLimitRatio=${nearLimitRatio.ruleValue()}",
+        "firstBoardLookback=$firstBoardLookback",
+        "volumeMultiplier=${volumeMultiplier.ruleValue()}",
+        "minAmount=${minAmount.toMinAmountStep().ruleValue()}",
+        "nearMaPct=${nearMaPct.toNearMaStep().ruleValue()}",
+        "maxFirstBoardMaDistancePct=${maxFirstBoardMaDistancePct.ruleValue()}",
+        "maxNineYangRisePct=${maxNineYangRisePct.ruleValue()}",
+        "minNineYangYangCount=$minNineYangYangCount",
+        "minNineYangNearMaCount=$minNineYangNearMaCount",
+        "nineYangMinScore=$nineYangMinScore",
+        "gameKLineNearMaPct=${gameKLineNearMaPct.ruleValue()}",
+        "reboundRatioThreshold=${reboundRatioThreshold.ruleValue()}",
+        "closeStrengthThreshold=${closeStrengthThreshold.ruleValue()}",
+        "gameKLineVolumeRatio=${gameKLineVolumeRatio.ruleValue()}",
+        "gameKLineMinScore=$gameKLineMinScore",
+    ).joinToString("|")
+
+private fun Double.ruleValue(): String =
+    String.format(Locale.US, "%.6f", this)
+        .trimEnd('0')
+        .trimEnd('.')
+
+private fun Double.toNearMaStep(): Double =
+    (this * 100.0).roundToInt().coerceIn(2, 10) / 100.0
+
+private fun Double.toMinAmountStep(): Double =
+    (this / 10_000_000.0).roundToInt().coerceIn(1, 30) * 10_000_000.0

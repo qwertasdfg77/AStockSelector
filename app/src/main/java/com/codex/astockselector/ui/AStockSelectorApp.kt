@@ -73,6 +73,7 @@ import com.codex.astockselector.data.SavedSignalSnapshot
 import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
+import com.codex.astockselector.model.strategyRuleKey
 import com.codex.astockselector.service.MarketUpdateService
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -126,7 +127,7 @@ fun AStockSelectorApp() {
                 val saved = LastSignalStore.load(context)
                 val nextNewSignalCodes = updateState.signals.newSignalCodesComparedWith(
                     saved = saved,
-                    ruleKey = config.signalCacheKey(),
+                    ruleKey = config.strategyRuleKey(),
                     statusText = updateState.statusText,
                 )
                 cacheInfo = latestCacheInfo
@@ -138,7 +139,13 @@ fun AStockSelectorApp() {
                     dataSource = updateState.dataSource,
                     statusText = updateState.statusText,
                     cacheDate = latestCacheInfo.dateEnd,
-                    ruleKey = config.signalCacheKey(),
+                    ruleKey = config.strategyRuleKey(),
+                    newSignalCodes = nextNewSignalCodes,
+                )
+                CacheMarketRepository.markNewSignalCodes(
+                    context = context,
+                    ruleKey = config.strategyRuleKey(),
+                    tradeDate = latestCacheInfo.dateEnd,
                     newSignalCodes = nextNewSignalCodes,
                 )
             }
@@ -151,7 +158,7 @@ fun AStockSelectorApp() {
     LaunchedEffect(Unit) {
         cacheInfo = CacheMarketRepository.cacheInfo(context)
         LastSignalStore.load(context)?.let { saved ->
-            if (saved.ruleKey.equivalentSignalRuleKey(config.signalCacheKey())) {
+            if (saved.ruleKey.equivalentSignalRuleKey(config.strategyRuleKey())) {
                 signals = saved.signals
                 dataSource = saved.dataSource
                 statusText = saved.statusText
@@ -182,9 +189,9 @@ fun AStockSelectorApp() {
     fun smartUpdateData() {
         selectedTab = AppTab.Today
         dataSource = "智能更新"
-        val ruleKey = config.signalCacheKey()
+        val ruleKey = config.strategyRuleKey()
         isLoading = true
-        statusText = "智能更新已启动：正在检查缓存与规则是否可复用..."
+        statusText = "阶段1/5：智能更新已启动，正在检查缓存与规则是否可复用..."
         MarketUpdateStore.start(statusText, "智能更新")
 
         scope.launch {
@@ -204,12 +211,12 @@ fun AStockSelectorApp() {
             }
 
             statusText = if (freshness.isLatest) {
-                "缓存已是收盘最新数据（${freshness.info.dateEnd}），规则或结果已变化，开始本地重新筛选..."
+                "阶段5/5：缓存已是收盘最新数据（${freshness.info.dateEnd}），规则或结果已变化，开始本地增量筛选..."
             } else if (freshness.info.exists && freshness.info.dateEnd >= freshness.expectedDate && freshness.info.retryableFailedStockCount > 0) {
-                "缓存已是收盘最新数据，但有 ${freshness.info.retryableFailedStockCount} 只失败股票需要补读..."
+                "阶段2/5：缓存已是收盘最新数据，但有 ${freshness.info.retryableFailedStockCount} 只失败股票需要补读..."
             } else {
                 val currentDate = if (freshness.info.exists) freshness.info.dateEnd.ifBlank { "无" } else "无缓存"
-                "缓存最新日期 $currentDate，目标收盘日期 ${freshness.expectedDate}，开始更新并筛选..."
+                "阶段1/5：缓存最新日期 $currentDate，目标收盘日期 ${freshness.expectedDate}，开始读取股票列表..."
             }
             MarketUpdateStore.start(statusText, "智能更新")
 
@@ -228,7 +235,7 @@ fun AStockSelectorApp() {
         selectedTab = AppTab.Settings
         dataSource = "重建缓存"
         isLoading = true
-        statusText = "重建缓存已启动：正在清理旧缓存并重新读取K线..."
+        statusText = "阶段1/5：重建缓存已启动，正在清理旧缓存并重新读取K线..."
         MarketUpdateStore.start(statusText, "重建缓存")
 
         val intent = Intent(context, MarketUpdateService::class.java)
@@ -442,11 +449,6 @@ private fun String.normalizeSignalRuleKey(): String =
         }
     }
 
-private fun Double.ruleValue(): String =
-    String.format(java.util.Locale.US, "%.6f", this)
-        .trimEnd('0')
-        .trimEnd('.')
-
 private fun Double.toNearMaStep(): Double =
     (this * 100.0).roundToInt().coerceIn(2, 10) / 100.0
 
@@ -496,26 +498,6 @@ private fun List<StrategySignal>.mergeForDisplay(): StrategySignal {
 private fun String.displayStrategyTitle(): String =
     StrategyOption.entries.firstOrNull { it.strategyName == this }?.title ?: this
 
-private fun StrategyConfig.signalCacheKey(): String =
-    listOf(
-        "rules=$SIGNAL_RULE_VERSION",
-        "nearLimitRatio=${nearLimitRatio.ruleValue()}",
-        "firstBoardLookback=$firstBoardLookback",
-        "volumeMultiplier=${volumeMultiplier.ruleValue()}",
-        "minAmount=${minAmount.toMinAmountStep().ruleValue()}",
-        "nearMaPct=${nearMaPct.toNearMaStep().ruleValue()}",
-        "maxFirstBoardMaDistancePct=${maxFirstBoardMaDistancePct.ruleValue()}",
-        "maxNineYangRisePct=${maxNineYangRisePct.ruleValue()}",
-        "minNineYangYangCount=$minNineYangYangCount",
-        "minNineYangNearMaCount=$minNineYangNearMaCount",
-        "nineYangMinScore=$nineYangMinScore",
-        "gameKLineNearMaPct=${gameKLineNearMaPct.ruleValue()}",
-        "reboundRatioThreshold=${reboundRatioThreshold.ruleValue()}",
-        "closeStrengthThreshold=${closeStrengthThreshold.ruleValue()}",
-        "gameKLineVolumeRatio=${gameKLineVolumeRatio.ruleValue()}",
-        "gameKLineMinScore=$gameKLineMinScore",
-    ).joinToString("|")
-
 private fun Set<StrategyOption>.summary(): String =
     StrategyOption.entries
         .filter { it in this }
@@ -552,7 +534,6 @@ private fun buildDisplayStatusText(
 
 private const val STRATEGY_PREFS_NAME = "strategy_selection"
 private const val STRATEGY_PREFS_KEY = "enabled_strategies"
-private const val SIGNAL_RULE_VERSION = "20260616_low_level_start_v1"
 
 private fun loadSelectedStrategies(context: Context): Set<StrategyOption> {
     val saved = context

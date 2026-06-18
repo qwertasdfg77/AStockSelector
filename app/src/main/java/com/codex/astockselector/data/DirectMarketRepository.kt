@@ -187,7 +187,7 @@ object DirectMarketRepository {
         onProgress: suspend (String) -> Unit = {},
     ): List<MarketCacheStockCandidate> {
         return withContext(Dispatchers.IO) {
-            emit(onProgress, "正在读取股票列表，用于更新缓存...")
+            emit(onProgress, "阶段1/5：正在读取沪深A股股票列表，用于更新缓存...")
             val stocks = loadStocks(config, onProgress)
             if (stocks.isEmpty()) {
                 error("没有读取到股票列表，请检查手机网络后重试")
@@ -213,7 +213,7 @@ object DirectMarketRepository {
             }
 
             val maxDays = targets.maxOf { it.days }
-            emit(onProgress, "准备更新 ${targets.size} 只股票，最多读取最近 ${maxDays} 天K线并合并到缓存...")
+            emit(onProgress, "阶段3/5：准备补K线 ${targets.size} 只股票，最多读取最近 ${maxDays} 天K线并合并到缓存...")
             val completed = AtomicInteger(0)
             val success = AtomicInteger(0)
             val sinaSuccess = AtomicInteger(0)
@@ -276,7 +276,7 @@ object DirectMarketRepository {
                                 if (done == total || done % 50 == 0) {
                                     emit(
                                         onProgress,
-                                        "缓存更新K线 $done/$total，成功 ${success.get()}（新浪 ${sinaSuccess.get()}，备用腾讯 ${fallback.get()}），失败 ${failed.get()}，剩余约 ${
+                                        "阶段3/5：正在补K线 $done/$total，成功 ${success.get()}（新浪 ${sinaSuccess.get()}，备用腾讯 ${fallback.get()}），失败 ${failed.get()}，剩余约 ${
                                             estimateRemaining(done, total, startedAt)
                                         }。",
                                     )
@@ -295,7 +295,7 @@ object DirectMarketRepository {
 
             emit(
                 onProgress,
-                "缓存更新K线读取完成：成功 ${success.get()} 只（新浪 ${sinaSuccess.get()}，备用腾讯 ${fallback.get()}），失败 ${failed.get()} 只。",
+                "阶段3/5：K线补读完成：成功 ${success.get()} 只（新浪 ${sinaSuccess.get()}，备用腾讯 ${fallback.get()}），失败 ${failed.get()} 只。",
             )
             MarketCacheUpdateResult(
                 updates = result,

@@ -4,15 +4,20 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.codex.astockselector.model.DailyBar
 import com.codex.astockselector.model.MarketSegment
+import com.codex.astockselector.model.RuleCheck
+import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StockProfile
 import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
+import com.codex.astockselector.model.strategyRuleKey
 import com.codex.astockselector.strategy.StrategyEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -69,6 +74,7 @@ object CacheMarketRepository {
     private const val SIGNAL_LOOKBACK_TRADE_DAYS = 270
     private const val INCREMENTAL_UPDATE_DAYS = 40
     private const val EVALUATION_BATCH_SIZE = 64
+    private const val SQLITE_MAX_VARIABLES = 900
     const val MAX_DAILY_FAILURE_RETRIES = 2
     private const val MIN_EXPECTED_DATE_COVERAGE = 0.85
     private val dateFormatter = DateTimeFormatter.BASIC_ISO_DATE
@@ -92,9 +98,9 @@ object CacheMarketRepository {
             emit(onProgress, "缓存已是收盘最新数据，但有 ${info.retryableFailedStockCount} 只失败股票需要补读。")
         } else {
             val currentDate = if (info.exists) info.dateEnd.ifBlank { "无" } else "无缓存"
-            emit(onProgress, "缓存最新日期 $currentDate，目标收盘日期 $expectedDate，开始按股票缺口更新...")
+            emit(onProgress, "阶段1/5：缓存最新日期 $currentDate，目标收盘日期 $expectedDate，开始读取股票列表并规划缺口更新...")
         }
-        updateCache(context, config, info, expectedDate, forceRebuild = false, onProgress)
+        val updatedCodes = updateCache(context, config, info, expectedDate, forceRebuild = false, onProgress)
         info = cacheInfo(context)
         if (!info.exists || info.dateEnd < expectedDate) {
             val actualDate = info.dateEnd.ifBlank { "无" }
@@ -103,8 +109,8 @@ object CacheMarketRepository {
         if (info.retryableFailedStockCount > 0) {
             emit(onProgress, "仍有 ${info.retryableFailedStockCount} 只股票未补齐，已记录失败队列，稍后可再次重试。")
         }
-        emit(onProgress, "缓存已更新到 ${info.dateEnd}，开始筛选...")
-        loadSignals(context, config, onProgress)
+        emit(onProgress, "阶段5/5：缓存已更新到 ${info.dateEnd}，开始增量筛选...")
+        loadSignals(context, config, onProgress, updatedCodes = updatedCodes)
     }
 
     suspend fun rebuildCacheAndLoadSignals(
@@ -113,10 +119,10 @@ object CacheMarketRepository {
         onProgress: suspend (String) -> Unit = {},
     ): List<StrategySignal> = withContext(Dispatchers.IO) {
         val expectedDate = expectedLatestClosedTradeDate()
-        emit(onProgress, "开始重建缓存：将删除旧K线缓存，但保留App设置和已选战法。")
+        emit(onProgress, "阶段1/5：开始重建缓存，将删除旧K线缓存，但保留App设置和已选战法。")
         val deletedCount = deleteCacheFiles(context)
-        emit(onProgress, "已删除旧缓存文件 $deletedCount 个，开始重新下载最近 $CACHE_KEEP_TRADE_DAYS 个交易日。")
-        updateCache(
+        emit(onProgress, "阶段2/5：已删除旧缓存文件 $deletedCount 个，开始读取股票列表并规划重建。")
+        val updatedCodes = updateCache(
             context = context,
             config = config,
             currentInfo = MarketCacheInfo(),
@@ -129,8 +135,8 @@ object CacheMarketRepository {
             val actualDate = info.dateEnd.ifBlank { "无" }
             error("重建缓存后仍未达到目标收盘日期：目标 $expectedDate，当前 $actualDate。请稍后重试或检查数据源。")
         }
-        emit(onProgress, "缓存重建完成：${info.stockCount} 只股票，${info.dailyBarCount} 行K线，开始筛选...")
-        loadSignals(context, config, onProgress)
+        emit(onProgress, "阶段5/5：缓存重建完成：${info.stockCount} 只股票，${info.dailyBarCount} 行K线，开始增量筛选...")
+        loadSignals(context, config, onProgress, updatedCodes = updatedCodes)
     }
 
     suspend fun cacheInfo(context: Context): MarketCacheInfo = withContext(Dispatchers.IO) {
@@ -195,20 +201,78 @@ object CacheMarketRepository {
         )
     }
 
+    suspend fun markNewSignalCodes(
+        context: Context,
+        ruleKey: String,
+        tradeDate: String,
+        newSignalCodes: Set<String>,
+    ) = withContext(Dispatchers.IO) {
+        if (ruleKey.isBlank() || tradeDate.isBlank()) return@withContext
+        val file = cacheFile(context)?.takeIf { it.canOpenForWrite() } ?: return@withContext
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
+            initSchema(db)
+            db.execSQL(
+                "UPDATE strategy_signal_results SET is_new = 0 WHERE rule_key = ? AND trade_date = ?",
+                arrayOf(ruleKey, tradeDate),
+            )
+            newSignalCodes.chunked(SQLITE_MAX_VARIABLES).forEach { chunk ->
+                val placeholders = chunk.joinToString(",") { "?" }
+                val args = arrayOf(ruleKey, tradeDate) + chunk.toTypedArray()
+                db.execSQL(
+                    "UPDATE strategy_signal_results SET is_new = 1 WHERE rule_key = ? AND trade_date = ? AND ts_code IN ($placeholders)",
+                    args,
+                )
+            }
+        }
+    }
+
     suspend fun loadSignals(
         context: Context,
         config: StrategyConfig,
         onProgress: suspend (String) -> Unit = {},
+        updatedCodes: Set<String> = emptySet(),
     ): List<StrategySignal> = withContext(Dispatchers.IO) {
-        val file = cacheFile(context) ?: error("没有找到本地缓存 market_cache.db")
+        val existingFile = cacheFile(context) ?: error("没有找到本地缓存 market_cache.db")
+        val file = if (existingFile.canOpenForWrite()) {
+            existingFile
+        } else {
+            writableCacheFile(context, onProgress)
+        }
         val startedAt = System.currentTimeMillis()
-        emit(onProgress, "正在打开本地缓存...")
+        emit(onProgress, "阶段5/5：正在打开本地缓存，准备增量筛选...")
 
-        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
+            initSchema(db)
             val stocks = loadStocks(db)
             val cutoffTradeDate = recentTradeDateCutoff(db, SIGNAL_LOOKBACK_TRADE_DAYS)
-            val total = db.countDistinctSince("daily_bars", "ts_code", cutoffTradeDate).coerceAtLeast(stocks.size)
-            emit(onProgress, "本地缓存已打开：${stocks.size} 只股票，开始筛选...")
+            val cacheTradeDate = latestTradeDate(db)
+            if (cacheTradeDate.isBlank()) {
+                error("本地缓存没有可筛选的K线数据")
+            }
+            val ruleKey = config.strategyRuleKey()
+            val currentCodes = stocks.keys
+
+            cleanObsoleteSignalResults(db, cacheTradeDate, currentCodes)
+            if (updatedCodes.isNotEmpty()) {
+                clearSignalResultsForCodes(db, updatedCodes)
+                emit(onProgress, "阶段5/5：已标记 ${updatedCodes.size} 只更新成功股票需要重新筛选。")
+            }
+
+            val evaluableCodes = loadEvaluableCodes(db, cutoffTradeDate).filter { it in stocks }.toSet()
+            val evaluatedCodes = loadEvaluatedCodes(db, ruleKey, cacheTradeDate)
+            val codesToEvaluate = (evaluableCodes - evaluatedCodes).sorted()
+            val cachedSignals = loadStoredSignalResults(db, ruleKey, cacheTradeDate)
+
+            if (codesToEvaluate.isEmpty()) {
+                val sorted = cachedSignals.sortSignals()
+                emit(onProgress, "阶段5/5：增量结果表已是最新，直接读取 ${sorted.size} 条命中结果。")
+                return@use sorted
+            }
+
+            emit(
+                onProgress,
+                "阶段5/5：正在增量筛选 ${codesToEvaluate.size}/${evaluableCodes.size} 只股票，已复用 ${cachedSignals.size} 条历史命中结果...",
+            )
 
             val signals = mutableListOf<StrategySignal>()
             val bars = mutableListOf<DailyBar>()
@@ -218,7 +282,21 @@ object CacheMarketRepository {
 
             suspend fun flushPendingEvaluations() {
                 if (pendingEvaluations.isEmpty()) return
-                signals += evaluateCandidateBatch(pendingEvaluations.toList(), config)
+                val pending = pendingEvaluations.toList()
+                val evaluated = evaluateCandidateBatch(pending, config)
+                signals += evaluated
+                val nowText = LocalDateTime.now(chinaZone).toString()
+                pending.forEach { candidate ->
+                    val stockSignals = evaluated.filter { it.stock.tsCode == candidate.stock.tsCode }
+                    storeSignalEvaluation(
+                        db = db,
+                        ruleKey = ruleKey,
+                        tradeDate = cacheTradeDate,
+                        tsCode = candidate.stock.tsCode,
+                        signals = stockSignals,
+                        nowText = nowText,
+                    )
+                }
                 pendingEvaluations.clear()
             }
 
@@ -230,70 +308,89 @@ object CacheMarketRepository {
                     if (pendingEvaluations.size >= EVALUATION_BATCH_SIZE) {
                         flushPendingEvaluations()
                     }
+                } else if (stock != null) {
+                    storeSignalEvaluation(
+                        db = db,
+                        ruleKey = ruleKey,
+                        tradeDate = cacheTradeDate,
+                        tsCode = stock.tsCode,
+                        signals = emptyList(),
+                        nowText = LocalDateTime.now(chinaZone).toString(),
+                    )
                 }
                 completed += 1
             }
 
-            db.rawQuery(
-                """
-                SELECT ts_code, trade_date, open, high, low, close, pre_close, pct_chg, volume, amount
-                FROM daily_bars
-                WHERE trade_date >= ?
-                ORDER BY ts_code, trade_date
-                """.trimIndent(),
-                arrayOf(cutoffTradeDate),
-            ).use { cursor ->
-                val tsIndex = cursor.getColumnIndexOrThrow("ts_code")
-                val dateIndex = cursor.getColumnIndexOrThrow("trade_date")
-                val openIndex = cursor.getColumnIndexOrThrow("open")
-                val highIndex = cursor.getColumnIndexOrThrow("high")
-                val lowIndex = cursor.getColumnIndexOrThrow("low")
-                val closeIndex = cursor.getColumnIndexOrThrow("close")
-                val preCloseIndex = cursor.getColumnIndexOrThrow("pre_close")
-                val pctIndex = cursor.getColumnIndexOrThrow("pct_chg")
-                val volumeIndex = cursor.getColumnIndexOrThrow("volume")
-                val amountIndex = cursor.getColumnIndexOrThrow("amount")
+            codesToEvaluate.chunked(SQLITE_MAX_VARIABLES).forEach { codeChunk ->
+                val placeholders = codeChunk.joinToString(",") { "?" }
+                val args = arrayOf(cutoffTradeDate) + codeChunk.toTypedArray()
+                db.rawQuery(
+                    """
+                    SELECT ts_code, trade_date, open, high, low, close, pre_close, pct_chg, volume, amount
+                    FROM daily_bars
+                    WHERE trade_date >= ? AND ts_code IN ($placeholders)
+                    ORDER BY ts_code, trade_date
+                    """.trimIndent(),
+                    args,
+                ).use { cursor ->
+                    val tsIndex = cursor.getColumnIndexOrThrow("ts_code")
+                    val dateIndex = cursor.getColumnIndexOrThrow("trade_date")
+                    val openIndex = cursor.getColumnIndexOrThrow("open")
+                    val highIndex = cursor.getColumnIndexOrThrow("high")
+                    val lowIndex = cursor.getColumnIndexOrThrow("low")
+                    val closeIndex = cursor.getColumnIndexOrThrow("close")
+                    val preCloseIndex = cursor.getColumnIndexOrThrow("pre_close")
+                    val pctIndex = cursor.getColumnIndexOrThrow("pct_chg")
+                    val volumeIndex = cursor.getColumnIndexOrThrow("volume")
+                    val amountIndex = cursor.getColumnIndexOrThrow("amount")
 
-                while (cursor.moveToNext()) {
-                    val tsCode = cursor.getString(tsIndex)
-                    if (currentTsCode.isBlank()) {
-                        currentTsCode = tsCode
-                    } else if (tsCode != currentTsCode) {
-                        evaluateCurrent()
-                        if (completed % 50 == 0) {
-                            flushPendingEvaluations()
-                            emit(
-                                onProgress,
-                                "缓存筛选 $completed/$total，已命中 ${signals.size} 条，剩余约 ${
-                                    estimateRemaining(completed, total, startedAt)
-                                }。",
-                            )
+                    while (cursor.moveToNext()) {
+                        val tsCode = cursor.getString(tsIndex)
+                        if (currentTsCode.isBlank()) {
+                            currentTsCode = tsCode
+                        } else if (tsCode != currentTsCode) {
+                            evaluateCurrent()
+                            if (completed % 50 == 0) {
+                                flushPendingEvaluations()
+                                emit(
+                                    onProgress,
+                                    "阶段5/5：正在筛选 $completed/${codesToEvaluate.size}，本次新命中 ${signals.size} 条，剩余约 ${
+                                        estimateRemaining(completed, codesToEvaluate.size, startedAt)
+                                    }。",
+                                )
+                            }
+                            bars.clear()
+                            currentTsCode = tsCode
                         }
-                        bars.clear()
-                        currentTsCode = tsCode
-                    }
 
-                    bars += DailyBar(
-                        tsCode = tsCode,
-                        tradeDate = cursor.getString(dateIndex),
-                        open = cursor.getDouble(openIndex),
-                        high = cursor.getDouble(highIndex),
-                        low = cursor.getDouble(lowIndex),
-                        close = cursor.getDouble(closeIndex),
-                        preClose = cursor.getDouble(preCloseIndex),
-                        pctChg = cursor.getDouble(pctIndex),
-                        volume = cursor.getDouble(volumeIndex),
-                        amount = cursor.getDouble(amountIndex),
-                    )
+                        bars += DailyBar(
+                            tsCode = tsCode,
+                            tradeDate = cursor.getString(dateIndex),
+                            open = cursor.getDouble(openIndex),
+                            high = cursor.getDouble(highIndex),
+                            low = cursor.getDouble(lowIndex),
+                            close = cursor.getDouble(closeIndex),
+                            preClose = cursor.getDouble(preCloseIndex),
+                            pctChg = cursor.getDouble(pctIndex),
+                            volume = cursor.getDouble(volumeIndex),
+                            amount = cursor.getDouble(amountIndex),
+                        )
+                    }
                 }
             }
             evaluateCurrent()
             flushPendingEvaluations()
 
-            val sorted = signals.sortedWith(
-                compareByDescending<StrategySignal> { it.score }.thenBy { it.stock.tsCode },
-            )
-            emit(onProgress, "本地缓存筛选完成：命中 ${sorted.size} 条信号。")
+            val missingBarCodes = codesToEvaluate.toSet() - loadEvaluatedCodes(db, ruleKey, cacheTradeDate)
+            if (missingBarCodes.isNotEmpty()) {
+                val nowText = LocalDateTime.now(chinaZone).toString()
+                missingBarCodes.forEach { tsCode ->
+                    storeSignalEvaluation(db, ruleKey, cacheTradeDate, tsCode, emptyList(), nowText)
+                }
+            }
+
+            val sorted = (cachedSignals + signals).sortSignals()
+            emit(onProgress, "阶段5/5：本地增量筛选完成，复用 ${cachedSignals.size} 条，新增 ${signals.size} 条，合计命中 ${sorted.size} 条信号。")
             sorted
         }
     }
@@ -305,7 +402,7 @@ object CacheMarketRepository {
         expectedDate: String,
         forceRebuild: Boolean,
         onProgress: suspend (String) -> Unit,
-    ) {
+    ): Set<String> {
         val file = writableCacheFile(context, onProgress)
         ensureSchema(file)
 
@@ -336,8 +433,8 @@ object CacheMarketRepository {
                     db.endTransaction()
                 }
             }
-            emit(onProgress, "没有需要联网补读的股票，已刷新股票列表和缓存状态。")
-            return
+            emit(onProgress, "阶段2/5：没有需要联网补读的股票，已刷新股票列表和缓存状态。")
+            return emptySet()
         }
 
         val updateResult = DirectMarketRepository.loadCacheUpdates(
@@ -345,13 +442,13 @@ object CacheMarketRepository {
             onProgress = onProgress,
         )
         val allTargetsFailed = updateResult.updates.isEmpty() && updateResult.failures.isNotEmpty()
+        val successCodes = updateResult.updates.map { it.stock.tsCode }.toSet()
 
-        emit(onProgress, "正在写入缓存数据库...")
+        emit(onProgress, "阶段4/5：正在保存K线到本地缓存数据库...")
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             initSchema(db)
             val nowText = LocalDateTime.now(chinaZone).toString()
             val targetCodes = targets.map { it.candidate.stock.tsCode }.toSet()
-            val successCodes = updateResult.updates.map { it.stock.tsCode }.toSet()
             val failedTargetCodes = targetCodes - successCodes
 
             db.beginTransaction()
@@ -384,7 +481,7 @@ object CacheMarketRepository {
                         )
                     }
                     if ((index + 1) % 200 == 0) {
-                        emit(onProgress, "缓存写入 ${index + 1}/${updateResult.updates.size} 只...")
+                        emit(onProgress, "阶段4/5：正在保存缓存 ${index + 1}/${updateResult.updates.size} 只...")
                     }
                 }
 
@@ -401,10 +498,10 @@ object CacheMarketRepository {
                 if (coverage < MIN_EXPECTED_DATE_COVERAGE) {
                     emit(
                         onProgress,
-                        "目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%，低于 ${String.format("%.0f", MIN_EXPECTED_DATE_COVERAGE * 100)}%，失败股票已保留到下次补读。",
+                        "阶段4/5：目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%，低于 ${String.format("%.0f", MIN_EXPECTED_DATE_COVERAGE * 100)}%，失败股票已保留到下次补读。",
                     )
                 } else {
-                    emit(onProgress, "目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%。")
+                    emit(onProgress, "阶段4/5：目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%。")
                 }
                 db.setTransactionSuccessful()
             } finally {
@@ -414,6 +511,7 @@ object CacheMarketRepository {
         if (allTargetsFailed) {
             error("本次目标股票K线全部读取失败，已记录失败队列。")
         }
+        return successCodes
     }
 
     private fun cacheFile(context: Context): File? {
@@ -531,7 +629,7 @@ object CacheMarketRepository {
             }
 
             if (skippedByRetryLimit > 0) {
-                emit(onProgress, "有 $skippedByRetryLimit 只股票今天已达到失败重试上限，暂不重复请求。")
+                emit(onProgress, "阶段2/5：有 $skippedByRetryLimit 只股票今天已达到失败重试上限，暂不重复请求。")
             }
             if (planned.isNotEmpty()) {
                 val action = if (forceRebuild) {
@@ -541,7 +639,7 @@ object CacheMarketRepository {
                 }
                 emit(
                     onProgress,
-                    "$action 计划：共 ${planned.size} 只；新增/历史不足 $newCount 只，缺目标交易日 $missingDateCount 只，失败补读 $failureCount 只。",
+                    "阶段2/5：$action 计划：共 ${planned.size} 只；新增/历史不足 $newCount 只，缺目标交易日 $missingDateCount 只，失败补读 $failureCount 只。",
                 )
             }
             planned
@@ -616,6 +714,42 @@ object CacheMarketRepository {
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_cache_update_failures_retry ON cache_update_failures(retry_date, retry_count)")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS strategy_evaluations (
+                rule_key TEXT NOT NULL,
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                signal_count INTEGER NOT NULL DEFAULT 0,
+                evaluated_at TEXT NOT NULL,
+                PRIMARY KEY (rule_key, ts_code, trade_date)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_strategy_evaluations_date ON strategy_evaluations(rule_key, trade_date)")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS strategy_signal_results (
+                rule_key TEXT NOT NULL,
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                reasons_json TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                buy_trigger TEXT NOT NULL,
+                stop_loss TEXT NOT NULL,
+                rule_checks_json TEXT NOT NULL,
+                is_new INTEGER NOT NULL DEFAULT 0,
+                evaluated_at TEXT NOT NULL,
+                PRIMARY KEY (rule_key, ts_code, trade_date, strategy)
+            )
+            """.trimIndent(),
+        )
+        db.addColumnIfMissing("strategy_signal_results", "is_new", "INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_strategy_signal_results_date ON strategy_signal_results(rule_key, trade_date)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_strategy_signal_results_stock ON strategy_signal_results(rule_key, ts_code)")
     }
 
     private fun syncStockMaster(
@@ -897,6 +1031,247 @@ object CacheMarketRepository {
             .flatten()
     }
 
+    private fun latestTradeDate(db: SQLiteDatabase): String =
+        db.rawQuery("SELECT MAX(trade_date) FROM daily_bars", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getStringOrEmpty(0) else ""
+        }
+
+    private fun loadEvaluableCodes(db: SQLiteDatabase, cutoffTradeDate: String): List<String> {
+        val codes = mutableListOf<String>()
+        db.rawQuery(
+            "SELECT DISTINCT ts_code FROM daily_bars WHERE trade_date >= ? ORDER BY ts_code",
+            arrayOf(cutoffTradeDate),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                codes += cursor.getString(0)
+            }
+        }
+        return codes
+    }
+
+    private fun loadEvaluatedCodes(
+        db: SQLiteDatabase,
+        ruleKey: String,
+        tradeDate: String,
+    ): Set<String> {
+        val codes = mutableSetOf<String>()
+        db.rawQuery(
+            "SELECT ts_code FROM strategy_evaluations WHERE rule_key = ? AND trade_date = ?",
+            arrayOf(ruleKey, tradeDate),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                codes += cursor.getString(0)
+            }
+        }
+        return codes
+    }
+
+    private fun loadStoredSignalResults(
+        db: SQLiteDatabase,
+        ruleKey: String,
+        tradeDate: String,
+    ): List<StrategySignal> {
+        val signals = mutableListOf<StrategySignal>()
+        db.rawQuery(
+            """
+            SELECT r.trade_date,
+                   r.ts_code,
+                   s.name,
+                   s.market,
+                   s.is_st,
+                   r.strategy,
+                   r.score,
+                   r.level,
+                   r.reasons_json,
+                   r.metrics_json,
+                   r.buy_trigger,
+                   r.stop_loss,
+                   r.rule_checks_json
+            FROM strategy_signal_results r
+            JOIN stocks s ON s.ts_code = r.ts_code
+            WHERE r.rule_key = ? AND r.trade_date = ?
+            """.trimIndent(),
+            arrayOf(ruleKey, tradeDate),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val stock = StockProfile(
+                    tsCode = cursor.getString(1),
+                    name = cursor.getString(2),
+                    market = marketFromValue(cursor.getString(3)),
+                    listDate = "",
+                    isSt = cursor.getInt(4) != 0,
+                )
+                signals += StrategySignal(
+                    tradeDate = cursor.getString(0),
+                    stock = stock,
+                    strategy = cursor.getString(5),
+                    score = cursor.getInt(6),
+                    level = cursor.getString(7).toSignalLevel(),
+                    reasons = cursor.getString(8).toStringList(),
+                    metrics = cursor.getString(9).toPairList(),
+                    buyTrigger = cursor.getString(10),
+                    stopLoss = cursor.getString(11),
+                    ruleChecks = cursor.getString(12).toRuleCheckList(),
+                )
+            }
+        }
+        return signals
+    }
+
+    private fun storeSignalEvaluation(
+        db: SQLiteDatabase,
+        ruleKey: String,
+        tradeDate: String,
+        tsCode: String,
+        signals: List<StrategySignal>,
+        nowText: String,
+    ) {
+        db.execSQL(
+            "DELETE FROM strategy_signal_results WHERE rule_key = ? AND ts_code = ? AND trade_date = ?",
+            arrayOf(ruleKey, tsCode, tradeDate),
+        )
+        db.execSQL(
+            """
+            INSERT OR REPLACE INTO strategy_evaluations (
+                rule_key, ts_code, trade_date, signal_count, evaluated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """.trimIndent(),
+            arrayOf(ruleKey, tsCode, tradeDate, signals.size, nowText),
+        )
+
+        signals.forEach { signal ->
+            db.execSQL(
+                """
+                INSERT OR REPLACE INTO strategy_signal_results (
+                    rule_key, ts_code, trade_date, strategy, score, level, reasons_json, metrics_json,
+                    buy_trigger, stop_loss, rule_checks_json, evaluated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf(
+                    ruleKey,
+                    tsCode,
+                    tradeDate,
+                    signal.strategy,
+                    signal.score,
+                    signal.level.name,
+                    signal.reasons.toStringJsonArray().toString(),
+                    signal.metrics.toPairJsonArray().toString(),
+                    signal.buyTrigger,
+                    signal.stopLoss,
+                    signal.ruleChecks.toRuleCheckJsonArray().toString(),
+                    nowText,
+                ),
+            )
+        }
+    }
+
+    private fun clearSignalResultsForCodes(
+        db: SQLiteDatabase,
+        codes: Set<String>,
+    ) {
+        if (codes.isEmpty()) return
+        codes.chunked(SQLITE_MAX_VARIABLES).forEach { chunk ->
+            val placeholders = chunk.joinToString(",") { "?" }
+            db.execSQL(
+                "DELETE FROM strategy_signal_results WHERE ts_code IN ($placeholders)",
+                chunk.toTypedArray(),
+            )
+            db.execSQL(
+                "DELETE FROM strategy_evaluations WHERE ts_code IN ($placeholders)",
+                chunk.toTypedArray(),
+            )
+        }
+    }
+
+    private fun cleanObsoleteSignalResults(
+        db: SQLiteDatabase,
+        currentTradeDate: String,
+        currentCodes: Set<String>,
+    ) {
+        db.execSQL("DELETE FROM strategy_signal_results WHERE trade_date != ?", arrayOf(currentTradeDate))
+        db.execSQL("DELETE FROM strategy_evaluations WHERE trade_date != ?", arrayOf(currentTradeDate))
+        if (currentCodes.isEmpty()) return
+
+        val obsoleteCodes = mutableListOf<String>()
+        db.rawQuery("SELECT DISTINCT ts_code FROM strategy_evaluations", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                val tsCode = cursor.getString(0)
+                if (tsCode !in currentCodes) obsoleteCodes += tsCode
+            }
+        }
+        obsoleteCodes.chunked(SQLITE_MAX_VARIABLES).forEach { chunk ->
+            val placeholders = chunk.joinToString(",") { "?" }
+            db.execSQL(
+                "DELETE FROM strategy_signal_results WHERE ts_code IN ($placeholders)",
+                chunk.toTypedArray(),
+            )
+            db.execSQL(
+                "DELETE FROM strategy_evaluations WHERE ts_code IN ($placeholders)",
+                chunk.toTypedArray(),
+            )
+        }
+    }
+
+    private fun List<StrategySignal>.sortSignals(): List<StrategySignal> =
+        sortedWith(compareByDescending<StrategySignal> { it.score }.thenBy { it.stock.tsCode })
+
+    private fun List<String>.toStringJsonArray(): JSONArray {
+        val array = JSONArray()
+        forEach { array.put(it) }
+        return array
+    }
+
+    private fun List<Pair<String, String>>.toPairJsonArray(): JSONArray {
+        val array = JSONArray()
+        forEach { (label, value) ->
+            array.put(
+                JSONObject()
+                    .put("label", label)
+                    .put("value", value),
+            )
+        }
+        return array
+    }
+
+    private fun List<RuleCheck>.toRuleCheckJsonArray(): JSONArray {
+        val array = JSONArray()
+        forEach { check ->
+            array.put(
+                JSONObject()
+                    .put("label", check.label)
+                    .put("passed", check.passed),
+            )
+        }
+        return array
+    }
+
+    private fun String.toStringList(): List<String> {
+        val array = runCatching { JSONArray(this) }.getOrNull() ?: return emptyList()
+        return (0 until array.length()).map { index -> array.optString(index) }
+    }
+
+    private fun String.toPairList(): List<Pair<String, String>> {
+        val array = runCatching { JSONArray(this) }.getOrNull() ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            item.optString("label") to item.optString("value")
+        }
+    }
+
+    private fun String.toRuleCheckList(): List<RuleCheck> {
+        val array = runCatching { JSONArray(this) }.getOrNull() ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            RuleCheck(
+                label = item.optString("label"),
+                passed = item.optBoolean("passed"),
+            )
+        }
+    }
+
+    private fun String.toSignalLevel(): SignalLevel =
+        runCatching { SignalLevel.valueOf(this) }.getOrDefault(SignalLevel.NORMAL)
+
     private fun loadStocks(db: SQLiteDatabase): Map<String, StockProfile> {
         val result = mutableMapOf<String, StockProfile>()
         db.rawQuery(
@@ -939,16 +1314,6 @@ object CacheMarketRepository {
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
 
-    private fun SQLiteDatabase.countDistinct(table: String, column: String): Int =
-        rawQuery("SELECT COUNT(DISTINCT $column) FROM $table", null).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getInt(0) else 0
-        }
-
-    private fun SQLiteDatabase.countDistinctSince(table: String, column: String, tradeDate: String): Int =
-        rawQuery("SELECT COUNT(DISTINCT $column) FROM $table WHERE trade_date >= ?", arrayOf(tradeDate)).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getInt(0) else 0
-        }
-
     private fun SQLiteDatabase.tableExists(table: String): Boolean =
         rawQuery(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -956,6 +1321,20 @@ object CacheMarketRepository {
         ).use { cursor ->
             cursor.moveToFirst()
         }
+
+    private fun SQLiteDatabase.addColumnIfMissing(table: String, column: String, definition: String) {
+        val exists = rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            var found = false
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext() && !found) {
+                found = cursor.getString(nameIndex) == column
+            }
+            found
+        }
+        if (!exists) {
+            execSQL("ALTER TABLE $table ADD COLUMN $column $definition")
+        }
+    }
 
     private fun SQLiteDatabase.retryableFailureCount(today: String): Int =
         rawQuery(

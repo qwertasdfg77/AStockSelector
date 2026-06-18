@@ -26,11 +26,17 @@ class MarketUpdateService : Service() {
     private var runningJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    private data class NotificationProgress(
+        val max: Int,
+        val current: Int,
+        val indeterminate: Boolean,
+    )
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
-        startAsForeground("正在准备读取A股数据...")
+        startAsForeground("阶段1/5：正在准备读取A股数据...")
 
         if (runningJob?.isActive == true) {
             MarketUpdateStore.progress("后台读取已在运行中，请等待当前任务完成。")
@@ -48,9 +54,9 @@ class MarketUpdateService : Service() {
         acquireWakeLock()
         MarketUpdateStore.start(
             if (rebuildCache) {
-                "重建缓存已启动：正在清理旧缓存并重新读取K线..."
+                "阶段1/5：重建缓存已启动，正在清理旧缓存并重新读取K线..."
             } else {
-                "智能更新已启动：正在检查本地缓存是否为收盘最新数据..."
+                "阶段1/5：智能更新已启动，正在检查本地缓存是否为收盘最新数据..."
             },
             dataSource,
         )
@@ -138,15 +144,33 @@ class MarketUpdateService : Service() {
         } else {
             Notification.Builder(this)
         }
+        val progress = if (ongoing) {
+            parseNotificationProgress(text)
+        } else {
+            NotificationProgress(max = 0, current = 0, indeterminate = false)
+        }
         return builder
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("A股选股正在读取")
+            .setContentTitle("A股选股后台更新")
             .setContentText(text.take(90))
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
             .setOnlyAlertOnce(true)
+            .setProgress(progress.max, progress.current, progress.indeterminate)
             .build()
+    }
+
+    private fun parseNotificationProgress(text: String): NotificationProgress {
+        val match = Regex("""(\d+)\s*/\s*(\d+)""").findAll(text).lastOrNull()
+            ?: return NotificationProgress(max = 0, current = 0, indeterminate = true)
+        val current = match.groupValues[1].toIntOrNull() ?: 0
+        val max = match.groupValues[2].toIntOrNull() ?: 0
+        return if (max > 0 && current in 0..max) {
+            NotificationProgress(max = max, current = current, indeterminate = false)
+        } else {
+            NotificationProgress(max = 0, current = 0, indeterminate = true)
+        }
     }
 
     private fun createNotificationChannel() {
