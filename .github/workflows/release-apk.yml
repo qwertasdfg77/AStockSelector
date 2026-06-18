@@ -123,7 +123,7 @@ jobs:
 
       - name: Upload APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: release-files/RELEASE_NOTES.md
           files: |
