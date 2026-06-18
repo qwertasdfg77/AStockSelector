@@ -262,10 +262,15 @@ fun AStockSelectorApp() {
                 AppUpdateRepository.checkLatest(context)
             }.onSuccess { result ->
                 if (result.hasUpdate) {
-                    appUpdateStatus = "发现新版 ${result.latest.versionName}，正在打开下载链接。"
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.latest.apkUrl))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
+                    appUpdateStatus = "发现新版 ${result.latest.versionName}，正在下载并校验安装包..."
+                    runCatching {
+                        AppUpdateRepository.downloadAndVerify(context, result.latest)
+                    }.onSuccess { apk ->
+                        appUpdateStatus = "新版 ${result.latest.versionName} 已通过 SHA256 校验，正在打开安装器。"
+                        context.startActivity(AppUpdateRepository.installIntent(context, apk))
+                    }.onFailure { error ->
+                        appUpdateStatus = "新版 ${result.latest.versionName} 下载或校验失败：${error.message ?: "未知错误"}"
+                    }
                 } else {
                     appUpdateStatus = "当前已是最新版本：${result.latest.versionName}。"
                 }

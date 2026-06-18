@@ -60,6 +60,38 @@ class StrategyEngineTest {
     }
 
     @Test
+    fun gameKLineSignalIsDetectedWhenBullishCandleRepairsPreviousBearishCandle() {
+        val yesterday = DailyBar(
+            tsCode = stock.tsCode,
+            tradeDate = "20261230",
+            open = 10.20,
+            high = 10.25,
+            low = 9.55,
+            close = 9.60,
+            preClose = 10.0,
+            pctChg = -4.0,
+            volume = 1_000.0,
+            amount = 60_000_000.0,
+        )
+        val today = DailyBar(
+            tsCode = stock.tsCode,
+            tradeDate = "20261231",
+            open = 9.70,
+            high = 10.30,
+            low = 9.65,
+            close = 10.25,
+            preClose = 9.60,
+            pctChg = 6.77,
+            volume = 1_300.0,
+            amount = 80_000_000.0,
+        )
+
+        val signals = StrategyEngine.evaluate(stock, flatBars(258) + yesterday + today, StrategyConfig())
+
+        assertTrue(signals.any { it.strategy == "博弈K" })
+    }
+
+    @Test
     fun insufficientBarsReturnNoSignals() {
         val signals = StrategyEngine.evaluate(stock, flatBars(120), StrategyConfig())
 
