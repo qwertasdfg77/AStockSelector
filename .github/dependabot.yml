@@ -25,6 +25,21 @@ updates:
     labels:
       - "dependencies"
       - "android"
+    ignore:
+      # Keep dependency suggestions compatible with the current Android baseline:
+      # compileSdk 35, Android Gradle Plugin 8.7.x, and Gradle 8.9.
+      - dependency-name: "com.android.application"
+        versions: [">= 9"]
+      - dependency-name: "androidx.activity:*"
+        versions: [">= 1.13"]
+      - dependency-name: "androidx.core:*"
+        versions: [">= 1.19"]
+      - dependency-name: "androidx.lifecycle:*"
+        versions: [">= 2.11"]
+      - dependency-name: "com.squareup.okhttp3:*"
+        versions: [">= 5"]
+      - dependency-name: "com.squareup.retrofit2:*"
+        versions: [">= 3"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
