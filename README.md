@@ -26,13 +26,13 @@
 
 ## 界面预览
 
-| 今日信号 | 设置与更新 |
-| --- | --- |
-| ![今日信号](docs/images/today-signals.svg) | ![设置与更新](docs/images/settings-update.svg) |
+| 今日信号 | 策略参数 | 数据更新 |
+| --- | --- | --- |
+| <img src="docs/screenshots/today-signals.png" alt="今日信号真实截图" width="260"> | <img src="docs/screenshots/settings-strategy.png" alt="策略参数真实截图" width="260"> | <img src="docs/screenshots/settings-update.png" alt="数据更新真实截图" width="260"> |
 
 ![使用流程](docs/images/demo-flow.svg)
 
-> 上方图片是项目展示用渲染图，用于说明界面结构和功能入口；真实手机截图可按 [docs/screenshots.md](docs/screenshots.md) 采集后补充。实际股票结果以 App 实时读取和本地缓存筛选为准。
+> 上方为真实手机截图；股票结果只代表截图时的本地缓存筛选结果，不构成投资建议。
 
 ## 项目特点
 

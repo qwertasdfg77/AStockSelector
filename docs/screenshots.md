@@ -1,10 +1,17 @@
 # 真实截图采集说明
 
-README 和 GitHub Pages 当前使用的是展示渲染图。为了让开源仓库更可信，后续可以补充真实手机截图和短录屏。
+README 和 GitHub Pages 已使用真实手机截图。后续如果界面变化，需要重新采集并替换这些图片。
+
+## 当前截图
+
+- `today-signals.png`：今日信号页面。
+- `settings-strategy.png`：设置页的策略参数区域。
+- `settings-update.png`：设置页的数据更新与筛选区域。
 
 ## 推荐截图
 
 - `today-signals.png`：今日信号页面。
+- `settings-strategy.png`：设置页的策略参数区域。
 - `settings-update.png`：设置与智能更新页面。
 - `update-progress.png`：缓存更新进度。
 - `app-update.png`：检测程序更新。
@@ -41,4 +48,4 @@ GitHub README 更适合展示 GIF。可以用常见视频工具把 `mp4` 转为 
 
 - 截图不要暴露个人 Token、账号、手机号或其他隐私。
 - 股票筛选结果不代表投资建议。
-- 提交真实截图后，再把 README 和 Pages 中的展示渲染图替换为真实截图。
+- 不要把“重建缓存”的二次确认弹窗作为展示截图。
