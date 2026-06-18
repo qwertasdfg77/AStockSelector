@@ -13,7 +13,7 @@
   <g transform="translate(92 88)">
     <text x="0" y="54" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="52" font-weight="700" fill="#f8fafc">AStockSelector</text>
     <text x="0" y="104" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="27" fill="#d1fae5">面向中文用户的 Android A 股策略选股器</text>
-    <text x="0" y="166" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="22" fill="#e2e8f0">本地缓存 · 智能更新 · 四个预设战法 · 自定义筛选 · GitHub 更新检测</text>
+    <text x="0" y="166" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="22" fill="#e2e8f0">本地缓存 · 智能更新 · 四个预设战法 · GitHub 更新检测</text>
     <g transform="translate(0 230)">
       <rect x="0" y="0" width="170" height="44" rx="22" fill="#22c55e"/>
       <text x="85" y="29" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans SC, Arial, sans-serif" font-size="18" font-weight="700" fill="#052e16">下载 APK</text>

@@ -42,21 +42,45 @@ class MarketUpdateService : Service() {
             nearMaPct = intent?.getDoubleExtra(EXTRA_NEAR_MA_PCT, 0.05) ?: 0.05,
             minAmount = intent?.getDoubleExtra(EXTRA_MIN_AMOUNT, 50_000_000.0) ?: 50_000_000.0,
         )
+        val rebuildCache = intent?.getBooleanExtra(EXTRA_REBUILD_CACHE, false) ?: false
+        val dataSource = if (rebuildCache) "重建缓存" else DATA_SOURCE
 
         acquireWakeLock()
-        MarketUpdateStore.start("智能更新已启动：正在检查本地缓存是否为收盘最新数据...", DATA_SOURCE)
+        MarketUpdateStore.start(
+            if (rebuildCache) {
+                "重建缓存已启动：正在清理旧缓存并重新读取K线..."
+            } else {
+                "智能更新已启动：正在检查本地缓存是否为收盘最新数据..."
+            },
+            dataSource,
+        )
         runningJob = serviceScope.launch {
             try {
-                val signals = CacheMarketRepository.loadSmartSignals(this@MarketUpdateService, config) { message ->
-                    MarketUpdateStore.progress(message, DATA_SOURCE)
-                    updateNotification(message)
+                val signals = if (rebuildCache) {
+                    CacheMarketRepository.rebuildCacheAndLoadSignals(this@MarketUpdateService, config) { message ->
+                        MarketUpdateStore.progress(message, dataSource)
+                        updateNotification(message)
+                    }
+                } else {
+                    CacheMarketRepository.loadSmartSignals(this@MarketUpdateService, config) { message ->
+                        MarketUpdateStore.progress(message, dataSource)
+                        updateNotification(message)
+                    }
                 }
-                val message = "智能更新筛选完成：命中 ${signals.size} 条信号。"
-                MarketUpdateStore.complete(signals, message, DATA_SOURCE)
+                val message = if (rebuildCache) {
+                    "重建缓存并筛选完成：命中 ${signals.size} 条信号。"
+                } else {
+                    "智能更新筛选完成：命中 ${signals.size} 条信号。"
+                }
+                MarketUpdateStore.complete(signals, message, dataSource)
                 updateNotification(message)
             } catch (error: Exception) {
-                val message = "更新失败：${error.message ?: "未知错误"}"
-                MarketUpdateStore.fail(message, DATA_SOURCE)
+                val message = if (rebuildCache) {
+                    "重建缓存失败：${error.message ?: "未知错误"}"
+                } else {
+                    "更新失败：${error.message ?: "未知错误"}"
+                }
+                MarketUpdateStore.fail(message, dataSource)
                 updateNotification(message)
             } finally {
                 releaseWakeLock()
@@ -169,6 +193,7 @@ class MarketUpdateService : Service() {
     companion object {
         const val EXTRA_NEAR_MA_PCT = "nearMaPct"
         const val EXTRA_MIN_AMOUNT = "minAmount"
+        const val EXTRA_REBUILD_CACHE = "rebuildCache"
         private const val DATA_SOURCE = "智能更新"
         private const val CHANNEL_ID = "market_update"
         private const val NOTIFICATION_ID = 1001

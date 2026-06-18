@@ -4,10 +4,10 @@
 --
 -- Scope:
 -- 1. Runtime cache tables currently used by the Android app:
---    metadata, stocks, daily_bars
+--    metadata, stocks, daily_bars, cache_update_failures
 -- 2. Complete app-level tables for future SQLite migration:
 --    signal snapshots, signal results, reasons, metrics, rule checks,
---    selected strategies, custom filter schemes, update logs, app update checks.
+--    selected strategies, update logs, app update checks.
 --
 -- Note:
 -- The current Android code still stores some app state in SharedPreferences.
@@ -97,6 +97,21 @@ CREATE INDEX IF NOT EXISTS idx_daily_bars_ts_date_desc
 CREATE INDEX IF NOT EXISTS idx_daily_bars_date_amount
     ON daily_bars(trade_date, amount);
 
+CREATE TABLE IF NOT EXISTS cache_update_failures (
+    ts_code TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    retry_date TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    last_failed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (ts_code) REFERENCES stocks(ts_code) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_update_failures_retry
+    ON cache_update_failures(retry_date, retry_count);
+
 -- Cache cleanup rule used by the app:
 -- DELETE FROM daily_bars
 -- WHERE trade_date < (
@@ -160,7 +175,6 @@ CREATE INDEX IF NOT EXISTS idx_selected_strategies_selected_order
 
 CREATE TABLE IF NOT EXISTS signal_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_type TEXT NOT NULL DEFAULT 'preset' CHECK (snapshot_type IN ('preset', 'custom')),
     data_source TEXT NOT NULL,
     status_text TEXT NOT NULL,
     cache_date TEXT NOT NULL DEFAULT '',
@@ -178,9 +192,6 @@ CREATE INDEX IF NOT EXISTS idx_signal_snapshots_created_at
 
 CREATE INDEX IF NOT EXISTS idx_signal_snapshots_cache_rule
     ON signal_snapshots(cache_date, rule_key);
-
-CREATE INDEX IF NOT EXISTS idx_signal_snapshots_type_date
-    ON signal_snapshots(snapshot_type, cache_date);
 
 -- One row per displayed stock result in one snapshot.
 CREATE TABLE IF NOT EXISTS signal_results (
@@ -278,116 +289,12 @@ CREATE TABLE IF NOT EXISTS new_signal_codes (
 );
 
 -- ============================================================
--- 7. Custom filter schemes
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS custom_filter_schemes (
-    scheme_name TEXT PRIMARY KEY CHECK (scheme_name IN ('Default', 'Mine1', 'Mine2')),
-    scheme_title TEXT NOT NULL,
-    match_mode TEXT NOT NULL DEFAULT 'All' CHECK (match_mode IN ('All', 'Any')),
-    base_exclude_st INTEGER NOT NULL DEFAULT 1 CHECK (base_exclude_st IN (0, 1)),
-    base_min_amount REAL NOT NULL DEFAULT 50000000,
-    base_min_bars INTEGER NOT NULL DEFAULT 260,
-
-    trend_close_above_ma TEXT NOT NULL DEFAULT 'Required',
-    trend_ma250_flat_up TEXT NOT NULL DEFAULT 'Score',
-    trend_bull_alignment TEXT NOT NULL DEFAULT 'Score',
-    trend_break_high TEXT NOT NULL DEFAULT 'Off',
-    trend_ma_period INTEGER NOT NULL DEFAULT 250,
-    trend_days INTEGER NOT NULL DEFAULT 5,
-    trend_high_days INTEGER NOT NULL DEFAULT 60,
-    trend_require_ma_up INTEGER NOT NULL DEFAULT 0 CHECK (trend_require_ma_up IN (0, 1)),
-
-    momentum_today_rise TEXT NOT NULL DEFAULT 'Off',
-    momentum_period_rise TEXT NOT NULL DEFAULT 'Score',
-    momentum_consecutive_rise TEXT NOT NULL DEFAULT 'Off',
-    momentum_new_high TEXT NOT NULL DEFAULT 'Off',
-    momentum_rebound_repair TEXT NOT NULL DEFAULT 'Off',
-    momentum_today_pct_min REAL NOT NULL DEFAULT 3.0,
-    momentum_rise_days INTEGER NOT NULL DEFAULT 10,
-    momentum_rise_min_pct REAL NOT NULL DEFAULT 0.0,
-    momentum_rise_max_pct REAL NOT NULL DEFAULT 25.0,
-    momentum_consecutive_days INTEGER NOT NULL DEFAULT 3,
-    momentum_high_days INTEGER NOT NULL DEFAULT 20,
-    momentum_rebound_ratio REAL NOT NULL DEFAULT 0.60,
-
-    volume_min_amount TEXT NOT NULL DEFAULT 'Required',
-    volume_above_average TEXT NOT NULL DEFAULT 'Score',
-    volume_rise_with_volume TEXT NOT NULL DEFAULT 'Off',
-    volume_shrink_pullback TEXT NOT NULL DEFAULT 'Off',
-    volume_min_amount_value REAL NOT NULL DEFAULT 50000000,
-    volume_average_days INTEGER NOT NULL DEFAULT 5,
-    volume_multiplier REAL NOT NULL DEFAULT 1.20,
-
-    pattern_yang_bao_yin TEXT NOT NULL DEFAULT 'Off',
-    pattern_bear_then_bull TEXT NOT NULL DEFAULT 'Off',
-    pattern_long_lower_shadow TEXT NOT NULL DEFAULT 'Off',
-    pattern_big_bull TEXT NOT NULL DEFAULT 'Off',
-    pattern_small_range TEXT NOT NULL DEFAULT 'Off',
-    pattern_gap_up TEXT NOT NULL DEFAULT 'Off',
-    pattern_body_ratio TEXT NOT NULL DEFAULT 'Off',
-    pattern_body_min_ratio REAL NOT NULL DEFAULT 0.50,
-    pattern_lower_shadow_min_ratio REAL NOT NULL DEFAULT 0.35,
-    pattern_upper_shadow_max_ratio REAL NOT NULL DEFAULT 0.30,
-    pattern_big_bull_pct REAL NOT NULL DEFAULT 5.0,
-    pattern_small_days INTEGER NOT NULL DEFAULT 5,
-    pattern_small_amplitude_pct REAL NOT NULL DEFAULT 4.0,
-    pattern_require_bull INTEGER NOT NULL DEFAULT 1 CHECK (pattern_require_bull IN (0, 1)),
-    pattern_close_high_ratio REAL NOT NULL DEFAULT 0.70,
-
-    ma_near TEXT NOT NULL DEFAULT 'Required',
-    ma60_near TEXT NOT NULL DEFAULT 'Off',
-    ma_pullback_hold TEXT NOT NULL DEFAULT 'Score',
-    ma_cross_up TEXT NOT NULL DEFAULT 'Off',
-    ma_converge TEXT NOT NULL DEFAULT 'Off',
-    ma_period INTEGER NOT NULL DEFAULT 250,
-    ma_near_pct REAL NOT NULL DEFAULT 0.05,
-    ma_require_above INTEGER NOT NULL DEFAULT 1 CHECK (ma_require_above IN (0, 1)),
-    ma_require_cross_today INTEGER NOT NULL DEFAULT 0 CHECK (ma_require_cross_today IN (0, 1)),
-    ma_converge_pct REAL NOT NULL DEFAULT 0.03,
-
-    limit_near TEXT NOT NULL DEFAULT 'Off',
-    limit_first_board TEXT NOT NULL DEFAULT 'Off',
-    limit_no_recent TEXT NOT NULL DEFAULT 'Off',
-    limit_board_count TEXT NOT NULL DEFAULT 'Off',
-    limit_not_one_word TEXT NOT NULL DEFAULT 'Off',
-    limit_no_broken_board TEXT NOT NULL DEFAULT 'Off',
-    limit_near_ratio REAL NOT NULL DEFAULT 0.90,
-    limit_lookback_days INTEGER NOT NULL DEFAULT 20,
-    limit_board_count_value INTEGER NOT NULL DEFAULT 1,
-    limit_exclude_st INTEGER NOT NULL DEFAULT 1 CHECK (limit_exclude_st IN (0, 1)),
-    limit_exclude_one_word INTEGER NOT NULL DEFAULT 1 CHECK (limit_exclude_one_word IN (0, 1)),
-
-    volatility_today_amplitude TEXT NOT NULL DEFAULT 'Off',
-    volatility_narrowing TEXT NOT NULL DEFAULT 'Off',
-    volatility_max_drawdown TEXT NOT NULL DEFAULT 'Off',
-    volatility_volume_wave TEXT NOT NULL DEFAULT 'Off',
-    volatility_quiet_breakout TEXT NOT NULL DEFAULT 'Off',
-    volatility_min_amplitude_pct REAL NOT NULL DEFAULT 0.0,
-    volatility_max_amplitude_pct REAL NOT NULL DEFAULT 8.0,
-    volatility_days INTEGER NOT NULL DEFAULT 10,
-    volatility_max_drawdown_pct REAL NOT NULL DEFAULT 12.0,
-    volatility_require_breakout INTEGER NOT NULL DEFAULT 1 CHECK (volatility_require_breakout IN (0, 1)),
-
-    raw_json TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_custom_filter_schemes_updated
-    ON custom_filter_schemes(updated_at DESC);
-
--- Enforce condition mode values on the most important mode columns.
--- Valid condition modes are Off, Required, Score.
--- SQLite cannot reuse a named enum, so app code should still validate all mode columns.
-
--- ============================================================
--- 8. Update logs
+-- 7. Update logs
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS market_update_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    update_type TEXT NOT NULL CHECK (update_type IN ('smart', 'cache_incremental', 'cache_full', 'direct_real', 'custom_filter')),
+    update_type TEXT NOT NULL CHECK (update_type IN ('smart', 'cache_incremental', 'cache_full', 'direct_real')),
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at TEXT,
     status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'success', 'failed', 'cancelled')),
@@ -429,7 +336,7 @@ CREATE INDEX IF NOT EXISTS idx_market_update_events_run
     ON market_update_events(run_id, event_time);
 
 -- ============================================================
--- 9. Program update checks
+-- 8. Program update checks
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS app_update_checks (
@@ -455,7 +362,7 @@ CREATE INDEX IF NOT EXISTS idx_app_update_checks_has_update
     ON app_update_checks(has_update, checked_at DESC);
 
 -- ============================================================
--- 10. Generic app settings
+-- 9. Generic app settings
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -473,7 +380,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- notification_permission_prompted
 
 -- ============================================================
--- 11. Convenience views
+-- 10. Convenience views
 -- ============================================================
 
 CREATE VIEW IF NOT EXISTS latest_signal_snapshot AS

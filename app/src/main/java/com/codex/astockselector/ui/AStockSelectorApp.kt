@@ -64,15 +64,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.codex.astockselector.data.AppUpdateRepository
 import com.codex.astockselector.data.CacheMarketRepository
-import com.codex.astockselector.data.CustomFilterStore
 import com.codex.astockselector.data.LastSignalStore
 import com.codex.astockselector.data.MarketCacheInfo
 import com.codex.astockselector.data.MarketUpdateStore
 import com.codex.astockselector.data.SavedSignalSnapshot
-import com.codex.astockselector.model.CustomConditionMode
-import com.codex.astockselector.model.CustomFilterConfig
-import com.codex.astockselector.model.CustomMatchMode
-import com.codex.astockselector.model.CustomScheme
 import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
@@ -98,10 +93,6 @@ fun AStockSelectorApp() {
     var cacheInfo by remember { mutableStateOf(MarketCacheInfo()) }
     var appUpdateStatus by remember { mutableStateOf("尚未检测程序更新。") }
     var isCheckingAppUpdate by remember { mutableStateOf(false) }
-    var customConfig by remember { mutableStateOf(CustomFilterStore.load(context, CustomScheme.Default)) }
-    var customSignals by remember { mutableStateOf(emptyList<StrategySignal>()) }
-    var customStatusText by remember { mutableStateOf("还没有自定义筛选结果。") }
-    var isCustomLoading by remember { mutableStateOf(false) }
 
     val config = StrategyConfig(
         nearMaPct = nearMaPct,
@@ -212,6 +203,8 @@ fun AStockSelectorApp() {
 
             statusText = if (freshness.isLatest) {
                 "缓存已是收盘最新数据（${freshness.info.dateEnd}），规则或结果已变化，开始本地重新筛选..."
+            } else if (freshness.info.exists && freshness.info.dateEnd >= freshness.expectedDate && freshness.info.retryableFailedStockCount > 0) {
+                "缓存已是收盘最新数据，但有 ${freshness.info.retryableFailedStockCount} 只失败股票需要补读..."
             } else {
                 val currentDate = if (freshness.info.exists) freshness.info.dateEnd.ifBlank { "无" } else "无缓存"
                 "缓存最新日期 $currentDate，目标收盘日期 ${freshness.expectedDate}，开始更新并筛选..."
@@ -229,11 +222,29 @@ fun AStockSelectorApp() {
         }
     }
 
+    fun rebuildCache() {
+        selectedTab = AppTab.Settings
+        dataSource = "重建缓存"
+        isLoading = true
+        statusText = "重建缓存已启动：正在清理旧缓存并重新读取K线..."
+        MarketUpdateStore.start(statusText, "重建缓存")
+
+        val intent = Intent(context, MarketUpdateService::class.java)
+            .putExtra(MarketUpdateService.EXTRA_NEAR_MA_PCT, nearMaPct)
+            .putExtra(MarketUpdateService.EXTRA_MIN_AMOUNT, minAmount)
+            .putExtra(MarketUpdateService.EXTRA_REBUILD_CACHE, true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
     fun refreshCacheInfo() {
         scope.launch {
             cacheInfo = CacheMarketRepository.cacheInfo(context)
             statusText = if (cacheInfo.exists) {
-                "已发现本地缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线。"
+                "已发现本地缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线，失败队列 ${cacheInfo.failedStockCount} 只。"
             } else {
                 "未发现本地缓存 market_cache.db。"
             }
@@ -265,26 +276,6 @@ fun AStockSelectorApp() {
 
     fun requestBackgroundPermission() {
         requestIgnoreBatteryOptimizations(context)
-    }
-
-    fun runCustomFilter() {
-        if (isCustomLoading) return
-        selectedTab = AppTab.Custom
-        isCustomLoading = true
-        customStatusText = "准备按${customConfig.scheme.title}开始自定义筛选..."
-        scope.launch {
-            runCatching {
-                CacheMarketRepository.loadCustomSignals(context, customConfig) { message ->
-                    customStatusText = message
-                }
-            }.onSuccess { result ->
-                customSignals = result
-                customStatusText = "自定义筛选完成：${customConfig.scheme.title} 命中 ${result.size} 只股票。"
-            }.onFailure { error ->
-                customStatusText = "自定义筛选失败：${error.message ?: "未知错误"}"
-            }
-            isCustomLoading = false
-        }
     }
 
     Scaffold(
@@ -339,27 +330,6 @@ fun AStockSelectorApp() {
                     strategySummary = strategySummary,
                 )
 
-                AppTab.Custom -> CustomFilterPage(
-                    config = customConfig,
-                    onConfigChange = { customConfig = it },
-                    signals = customSignals,
-                    statusText = customStatusText,
-                    isLoading = isCustomLoading,
-                    onRunFilter = ::runCustomFilter,
-                    onSchemeSelected = { scheme ->
-                        customConfig = CustomFilterStore.load(context, scheme)
-                        customStatusText = "已切换到${scheme.title}。"
-                    },
-                    onSaveScheme = {
-                        CustomFilterStore.save(context, customConfig)
-                        customStatusText = "已保存${customConfig.scheme.title}。"
-                    },
-                    onCopyScheme = {
-                        customConfig = CustomFilterStore.copyToNextScheme(context, customConfig)
-                        customStatusText = "已复制并切换到${customConfig.scheme.title}。"
-                    },
-                )
-
                 AppTab.Settings -> SettingsPage(
                     nearMaPct = nearMaPct,
                     onNearMaPctChange = { nearMaPct = it.toNearMaStep() },
@@ -378,6 +348,7 @@ fun AStockSelectorApp() {
                     onCheckAppUpdate = ::checkAppUpdate,
                     cacheInfo = cacheInfo,
                     onRefreshCacheInfo = ::refreshCacheInfo,
+                    onRebuildCache = ::rebuildCache,
                     onRequestBackgroundPermission = ::requestBackgroundPermission,
                 )
             }
@@ -387,7 +358,6 @@ fun AStockSelectorApp() {
 
 private enum class AppTab(val title: String) {
     Today("今日信号"),
-    Custom("自定义筛选"),
     Settings("设置"),
 }
 
@@ -475,14 +445,6 @@ private fun Double.toNearMaStep(): Double =
 
 private fun Double.toMinAmountStep(): Double =
     (this / 10_000_000.0).roundToInt().coerceIn(1, 30) * 10_000_000.0
-
-private fun Double.roundToStep(min: Double, max: Double, step: Double): Double =
-    ((this - min) / step).roundToInt()
-        .let { min + it * step }
-        .coerceIn(min, max)
-
-private fun List<CustomConditionMode>.isActive(): Boolean =
-    any { it != CustomConditionMode.Off }
 
 private fun List<StrategySignal>.mergeForDisplay(): StrategySignal {
     if (size == 1) return first()
@@ -625,791 +587,6 @@ private fun TodaySignals(
                 isLoading = isLoading,
             )
         },
-    )
-}
-
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
-@Composable
-private fun CustomFilterPage(
-    config: CustomFilterConfig,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-    signals: List<StrategySignal>,
-    statusText: String,
-    isLoading: Boolean,
-    onRunFilter: () -> Unit,
-    onSchemeSelected: (CustomScheme) -> Unit,
-    onSaveScheme: () -> Unit,
-    onCopyScheme: () -> Unit,
-) {
-    SignalList(
-        signals = signals,
-        newSignalCodes = emptySet(),
-        emptyText = "暂无自定义筛选结果。调整条件后点击开始筛选。",
-        header = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                DataStatusCard(
-                    dataSource = "自定义筛选",
-                    statusText = statusText,
-                    isLoading = isLoading,
-                )
-
-                SettingCard {
-                    Text("筛选方案", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        CustomScheme.entries.forEach { scheme ->
-                            FilterChip(
-                                selected = config.scheme == scheme,
-                                onClick = { onSchemeSelected(scheme) },
-                                enabled = !isLoading,
-                                label = { Text(scheme.title) },
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedButton(
-                            modifier = Modifier.weight(1f),
-                            enabled = !isLoading,
-                            onClick = onSaveScheme,
-                        ) {
-                            Text("保存当前方案")
-                        }
-                        OutlinedButton(
-                            modifier = Modifier.weight(1f),
-                            enabled = !isLoading,
-                            onClick = onCopyScheme,
-                        ) {
-                            Text("复制方案")
-                        }
-                    }
-                }
-
-                SettingCard {
-                    Text("条件组合方式", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        CustomMatchMode.entries.forEach { mode ->
-                            FilterChip(
-                                selected = config.matchMode == mode,
-                                onClick = { onConfigChange(config.copy(matchMode = mode)) },
-                                enabled = !isLoading,
-                                label = { Text(if (mode == CustomMatchMode.All) "全部满足（且）" else "任意满足（或）") },
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "基础过滤始终是硬条件；这里控制“必须”条件之间按且还是按或组合，加分项只影响排序。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                }
-
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isLoading,
-                    onClick = onRunFilter,
-                ) {
-                    Text(if (isLoading) "正在自定义筛选..." else "开始筛选")
-                }
-
-                CustomBaseFilterCard(
-                    config = config,
-                    enabled = !isLoading,
-                    onConfigChange = onConfigChange,
-                )
-                CustomTrendCard(config, !isLoading, onConfigChange)
-                CustomMomentumCard(config, !isLoading, onConfigChange)
-                CustomVolumeCard(config, !isLoading, onConfigChange)
-                CustomPatternCard(config, !isLoading, onConfigChange)
-                CustomMaPositionCard(config, !isLoading, onConfigChange)
-                CustomLimitCard(config, !isLoading, onConfigChange)
-                CustomVolatilityCard(config, !isLoading, onConfigChange)
-            }
-        },
-    )
-}
-
-@Composable
-private fun CustomBaseFilterCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    SettingCard {
-        Text("基础过滤", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("排除 ST")
-                Text("基础过滤不参与加分，未通过会直接排除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
-            }
-            Switch(
-                checked = config.baseExcludeSt,
-                onCheckedChange = { onConfigChange(config.copy(baseExcludeSt = it)) },
-                enabled = enabled,
-            )
-        }
-        AmountStepSlider(
-            title = "最低成交额",
-            value = config.baseMinAmount,
-            min = 10_000_000.0,
-            max = 300_000_000.0,
-            step = 10_000_000.0,
-            enabled = enabled,
-            onValueChange = { onConfigChange(config.copy(baseMinAmount = it)) },
-        )
-        IntChoiceRow(
-            title = "最少 K 线数量",
-            selected = config.baseMinBars,
-            values = listOf(120, 200, 260),
-            enabled = enabled,
-            onSelect = { onConfigChange(config.copy(baseMinBars = it)) },
-        )
-    }
-}
-
-@Composable
-private fun CustomTrendCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "趋势类",
-        active = listOf(config.trendCloseAboveMa, config.trendMa250FlatUp, config.trendBullAlignment, config.trendBreakHigh).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(trendCloseAboveMa = CustomConditionMode.Required)
-                } else {
-                    config.copy(
-                        trendCloseAboveMa = CustomConditionMode.Off,
-                        trendMa250FlatUp = CustomConditionMode.Off,
-                        trendBullAlignment = CustomConditionMode.Off,
-                        trendBreakHigh = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("股价站上 MA${config.trendMaPeriod}", config.trendCloseAboveMa, enabled) {
-            onConfigChange(config.copy(trendCloseAboveMa = it))
-        }
-        ConditionStateRow("MA250 走平或向上", config.trendMa250FlatUp, enabled) {
-            onConfigChange(config.copy(trendMa250FlatUp = it))
-        }
-        ConditionStateRow("MA5 > MA10 > MA20 多头排列", config.trendBullAlignment, enabled) {
-            onConfigChange(config.copy(trendBullAlignment = it))
-        }
-        ConditionStateRow("收盘价突破 N 日新高", config.trendBreakHigh, enabled) {
-            onConfigChange(config.copy(trendBreakHigh = it))
-        }
-        IntChoiceRow("均线周期", config.trendMaPeriod, listOf(5, 10, 20, 60, 120, 250), enabled) {
-            onConfigChange(config.copy(trendMaPeriod = it))
-        }
-        IntChoiceRow("趋势判断天数", config.trendDays, listOf(3, 5, 10), enabled) {
-            onConfigChange(config.copy(trendDays = it))
-        }
-        StepSlider("新高周期：${config.trendHighDays}日", config.trendHighDays.toDouble(), 10.0, 120.0, 10.0, enabled) {
-            onConfigChange(config.copy(trendHighDays = it.roundToInt()))
-        }
-        ToggleRow("要求短均线向上", config.trendRequireMaUp, enabled) {
-            onConfigChange(config.copy(trendRequireMaUp = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomMomentumCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "涨幅动量类",
-        active = listOf(
-            config.momentumTodayRise,
-            config.momentumPeriodRise,
-            config.momentumConsecutiveRise,
-            config.momentumNewHigh,
-            config.momentumReboundRepair,
-        ).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(momentumPeriodRise = CustomConditionMode.Score)
-                } else {
-                    config.copy(
-                        momentumTodayRise = CustomConditionMode.Off,
-                        momentumPeriodRise = CustomConditionMode.Off,
-                        momentumConsecutiveRise = CustomConditionMode.Off,
-                        momentumNewHigh = CustomConditionMode.Off,
-                        momentumReboundRepair = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("今日涨幅大于 X%", config.momentumTodayRise, enabled) {
-            onConfigChange(config.copy(momentumTodayRise = it))
-        }
-        ConditionStateRow("近 N 日涨幅在 X% 到 Y%", config.momentumPeriodRise, enabled) {
-            onConfigChange(config.copy(momentumPeriodRise = it))
-        }
-        ConditionStateRow("连涨 N 天", config.momentumConsecutiveRise, enabled) {
-            onConfigChange(config.copy(momentumConsecutiveRise = it))
-        }
-        ConditionStateRow("创 N 日新高", config.momentumNewHigh, enabled) {
-            onConfigChange(config.copy(momentumNewHigh = it))
-        }
-        ConditionStateRow("反弹修复前阴线比例大于 X%", config.momentumReboundRepair, enabled) {
-            onConfigChange(config.copy(momentumReboundRepair = it))
-        }
-        PercentStepSlider("今日涨幅下限", config.momentumTodayPctMin, 0.0, 10.0, 0.5, enabled) {
-            onConfigChange(config.copy(momentumTodayPctMin = it))
-        }
-        IntChoiceRow("统计天数", config.momentumRiseDays, listOf(3, 5, 10, 20), enabled) {
-            onConfigChange(config.copy(momentumRiseDays = it))
-        }
-        PercentStepSlider("阶段涨幅上限", config.momentumRiseMaxPct, 5.0, 60.0, 1.0, enabled) {
-            onConfigChange(config.copy(momentumRiseMaxPct = it))
-        }
-        StepSlider("反弹比例：${String.format("%.0f", config.momentumReboundRatio * 100)}%", config.momentumReboundRatio, 0.3, 1.0, 0.05, enabled) {
-            onConfigChange(config.copy(momentumReboundRatio = it))
-        }
-        IntChoiceRow("新高周期", config.momentumHighDays, listOf(10, 20, 30, 60), enabled) {
-            onConfigChange(config.copy(momentumHighDays = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomVolumeCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "成交量 / 成交额类",
-        active = listOf(config.volumeMinAmount, config.volumeAboveAverage, config.volumeRiseWithVolume, config.volumeShrinkPullback).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(volumeMinAmount = CustomConditionMode.Required)
-                } else {
-                    config.copy(
-                        volumeMinAmount = CustomConditionMode.Off,
-                        volumeAboveAverage = CustomConditionMode.Off,
-                        volumeRiseWithVolume = CustomConditionMode.Off,
-                        volumeShrinkPullback = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("成交额大于 X 万", config.volumeMinAmount, enabled) {
-            onConfigChange(config.copy(volumeMinAmount = it))
-        }
-        ConditionStateRow("今日成交量大于近 N 日均量 X 倍", config.volumeAboveAverage, enabled) {
-            onConfigChange(config.copy(volumeAboveAverage = it))
-        }
-        ConditionStateRow("放量上涨", config.volumeRiseWithVolume, enabled) {
-            onConfigChange(config.copy(volumeRiseWithVolume = it))
-        }
-        ConditionStateRow("缩量回调", config.volumeShrinkPullback, enabled) {
-            onConfigChange(config.copy(volumeShrinkPullback = it))
-        }
-        AmountStepSlider("最低成交额", config.volumeMinAmountValue, 10_000_000.0, 300_000_000.0, 10_000_000.0, enabled) {
-            onConfigChange(config.copy(volumeMinAmountValue = it))
-        }
-        IntChoiceRow("均量周期", config.volumeAverageDays, listOf(5, 10, 20), enabled) {
-            onConfigChange(config.copy(volumeAverageDays = it))
-        }
-        DoubleChoiceRow("放量倍数", config.volumeMultiplier, listOf(1.2, 1.5, 2.0), enabled) {
-            onConfigChange(config.copy(volumeMultiplier = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomPatternCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "K线形态类",
-        active = listOf(
-            config.patternYangBaoYin,
-            config.patternBearThenBull,
-            config.patternLongLowerShadow,
-            config.patternBigBull,
-            config.patternSmallRange,
-            config.patternGapUp,
-            config.patternBodyRatio,
-        ).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(patternBearThenBull = CustomConditionMode.Score)
-                } else {
-                    config.copy(
-                        patternYangBaoYin = CustomConditionMode.Off,
-                        patternBearThenBull = CustomConditionMode.Off,
-                        patternLongLowerShadow = CustomConditionMode.Off,
-                        patternBigBull = CustomConditionMode.Off,
-                        patternSmallRange = CustomConditionMode.Off,
-                        patternGapUp = CustomConditionMode.Off,
-                        patternBodyRatio = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("阳包阴", config.patternYangBaoYin, enabled) {
-            onConfigChange(config.copy(patternYangBaoYin = it))
-        }
-        ConditionStateRow("前阴后阳", config.patternBearThenBull, enabled) {
-            onConfigChange(config.copy(patternBearThenBull = it))
-        }
-        ConditionStateRow("长下影线", config.patternLongLowerShadow, enabled) {
-            onConfigChange(config.copy(patternLongLowerShadow = it))
-        }
-        ConditionStateRow("大阳线", config.patternBigBull, enabled) {
-            onConfigChange(config.copy(patternBigBull = it))
-        }
-        ConditionStateRow("小阴小阳整理", config.patternSmallRange, enabled) {
-            onConfigChange(config.copy(patternSmallRange = it))
-        }
-        ConditionStateRow("跳空高开", config.patternGapUp, enabled) {
-            onConfigChange(config.copy(patternGapUp = it))
-        }
-        ConditionStateRow("实体占比大于 X%", config.patternBodyRatio, enabled) {
-            onConfigChange(config.copy(patternBodyRatio = it))
-        }
-        PercentStepSlider("实体比例", config.patternBodyMinRatio * 100.0, 20.0, 90.0, 5.0, enabled) {
-            onConfigChange(config.copy(patternBodyMinRatio = it / 100.0))
-        }
-        PercentStepSlider("下影线比例", config.patternLowerShadowMinRatio * 100.0, 10.0, 70.0, 5.0, enabled) {
-            onConfigChange(config.copy(patternLowerShadowMinRatio = it / 100.0))
-        }
-        PercentStepSlider("大阳线涨幅", config.patternBigBullPct, 3.0, 10.0, 0.5, enabled) {
-            onConfigChange(config.copy(patternBigBullPct = it))
-        }
-        ToggleRow("要求阳线", config.patternRequireBull, enabled) {
-            onConfigChange(config.copy(patternRequireBull = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomMaPositionCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "均线位置类",
-        active = listOf(config.maNear, config.ma60Near, config.maPullbackHold, config.maCrossUp, config.maConverge).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(maNear = CustomConditionMode.Required)
-                } else {
-                    config.copy(
-                        maNear = CustomConditionMode.Off,
-                        ma60Near = CustomConditionMode.Off,
-                        maPullbackHold = CustomConditionMode.Off,
-                        maCrossUp = CustomConditionMode.Off,
-                        maConverge = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("距 MA${config.maPeriod} 不超过 X%", config.maNear, enabled) {
-            onConfigChange(config.copy(maNear = it))
-        }
-        ConditionStateRow("距 MA60 不超过 X%", config.ma60Near, enabled) {
-            onConfigChange(config.copy(ma60Near = it))
-        }
-        ConditionStateRow("回踩 MA${config.maPeriod} 不破", config.maPullbackHold, enabled) {
-            onConfigChange(config.copy(maPullbackHold = it))
-        }
-        ConditionStateRow("上穿 MA${config.maPeriod}", config.maCrossUp, enabled) {
-            onConfigChange(config.copy(maCrossUp = it))
-        }
-        ConditionStateRow("多均线粘合", config.maConverge, enabled) {
-            onConfigChange(config.copy(maConverge = it))
-        }
-        IntChoiceRow("均线类型", config.maPeriod, listOf(20, 60, 120, 250), enabled) {
-            onConfigChange(config.copy(maPeriod = it))
-        }
-        PercentStepSlider("允许偏离范围", config.maNearPct * 100.0, 2.0, 10.0, 1.0, enabled) {
-            onConfigChange(config.copy(maNearPct = it / 100.0))
-        }
-        ToggleRow("要求收盘在线上", config.maRequireAbove, enabled) {
-            onConfigChange(config.copy(maRequireAbove = it))
-        }
-        ToggleRow("要求当天上穿", config.maRequireCrossToday, enabled) {
-            onConfigChange(config.copy(maRequireCrossToday = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomLimitCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "A股涨停 / 连板类",
-        active = listOf(
-            config.limitNear,
-            config.limitFirstBoard,
-            config.limitNoRecent,
-            config.limitBoardCount,
-            config.limitNotOneWord,
-            config.limitNoBrokenBoard,
-        ).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(limitNear = CustomConditionMode.Score)
-                } else {
-                    config.copy(
-                        limitNear = CustomConditionMode.Off,
-                        limitFirstBoard = CustomConditionMode.Off,
-                        limitNoRecent = CustomConditionMode.Off,
-                        limitBoardCount = CustomConditionMode.Off,
-                        limitNotOneWord = CustomConditionMode.Off,
-                        limitNoBrokenBoard = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("涨幅接近涨停", config.limitNear, enabled) {
-            onConfigChange(config.copy(limitNear = it))
-        }
-        ConditionStateRow("首板", config.limitFirstBoard, enabled) {
-            onConfigChange(config.copy(limitFirstBoard = it))
-        }
-        ConditionStateRow("N 日内无涨停", config.limitNoRecent, enabled) {
-            onConfigChange(config.copy(limitNoRecent = it))
-        }
-        ConditionStateRow("连板数等于 N", config.limitBoardCount, enabled) {
-            onConfigChange(config.copy(limitBoardCount = it))
-        }
-        ConditionStateRow("非一字板", config.limitNotOneWord, enabled) {
-            onConfigChange(config.copy(limitNotOneWord = it))
-        }
-        ConditionStateRow("炸板过滤", config.limitNoBrokenBoard, enabled) {
-            onConfigChange(config.copy(limitNoBrokenBoard = it))
-        }
-        DoubleChoiceRow("涨停接近比例", config.limitNearRatio, listOf(0.90, 0.95, 0.98), enabled, label = { "${String.format("%.0f", it * 100)}%" }) {
-            onConfigChange(config.copy(limitNearRatio = it))
-        }
-        IntChoiceRow("回看天数", config.limitLookbackDays, listOf(10, 20, 30), enabled) {
-            onConfigChange(config.copy(limitLookbackDays = it))
-        }
-        IntChoiceRow("连板数量", config.limitBoardCountValue, listOf(1, 2, 3, 4), enabled) {
-            onConfigChange(config.copy(limitBoardCountValue = it))
-        }
-        ToggleRow("排除 ST", config.limitExcludeSt, enabled) {
-            onConfigChange(config.copy(limitExcludeSt = it))
-        }
-        ToggleRow("排除一字板", config.limitExcludeOneWord, enabled) {
-            onConfigChange(config.copy(limitExcludeOneWord = it))
-        }
-        Text(
-            "炸板过滤只用日K近似判断，不能精确识别分时回封。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.secondary,
-        )
-    }
-}
-
-@Composable
-private fun CustomVolatilityCard(
-    config: CustomFilterConfig,
-    enabled: Boolean,
-    onConfigChange: (CustomFilterConfig) -> Unit,
-) {
-    CustomModuleCard(
-        title = "波动率 / 振幅类",
-        active = listOf(
-            config.volatilityTodayAmplitude,
-            config.volatilityNarrowing,
-            config.volatilityMaxDrawdown,
-            config.volatilityVolumeWave,
-            config.volatilityQuietBreakout,
-        ).isActive(),
-        enabled = enabled,
-        onActiveChange = { active ->
-            onConfigChange(
-                if (active) {
-                    config.copy(volatilityMaxDrawdown = CustomConditionMode.Score)
-                } else {
-                    config.copy(
-                        volatilityTodayAmplitude = CustomConditionMode.Off,
-                        volatilityNarrowing = CustomConditionMode.Off,
-                        volatilityMaxDrawdown = CustomConditionMode.Off,
-                        volatilityVolumeWave = CustomConditionMode.Off,
-                        volatilityQuietBreakout = CustomConditionMode.Off,
-                    )
-                },
-            )
-        },
-    ) {
-        ConditionStateRow("今日振幅小于 / 大于 X%", config.volatilityTodayAmplitude, enabled) {
-            onConfigChange(config.copy(volatilityTodayAmplitude = it))
-        }
-        ConditionStateRow("近 N 日振幅收窄", config.volatilityNarrowing, enabled) {
-            onConfigChange(config.copy(volatilityNarrowing = it))
-        }
-        ConditionStateRow("近 N 日最大回撤小于 X%", config.volatilityMaxDrawdown, enabled) {
-            onConfigChange(config.copy(volatilityMaxDrawdown = it))
-        }
-        ConditionStateRow("突然放量放波动", config.volatilityVolumeWave, enabled) {
-            onConfigChange(config.copy(volatilityVolumeWave = it))
-        }
-        ConditionStateRow("低波动后突破", config.volatilityQuietBreakout, enabled) {
-            onConfigChange(config.copy(volatilityQuietBreakout = it))
-        }
-        PercentStepSlider("振幅上限", config.volatilityMaxAmplitudePct, 2.0, 15.0, 1.0, enabled) {
-            onConfigChange(config.copy(volatilityMaxAmplitudePct = it))
-        }
-        IntChoiceRow("统计天数", config.volatilityDays, listOf(5, 10, 20), enabled) {
-            onConfigChange(config.copy(volatilityDays = it))
-        }
-        PercentStepSlider("最大回撤", config.volatilityMaxDrawdownPct, 5.0, 30.0, 1.0, enabled) {
-            onConfigChange(config.copy(volatilityMaxDrawdownPct = it))
-        }
-        ToggleRow("要求突破", config.volatilityRequireBreakout, enabled) {
-            onConfigChange(config.copy(volatilityRequireBreakout = it))
-        }
-    }
-}
-
-@Composable
-private fun CustomModuleCard(
-    title: String,
-    active: Boolean,
-    enabled: Boolean,
-    onActiveChange: (Boolean) -> Unit,
-    content: @Composable () -> Unit,
-) {
-    SettingCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Switch(
-                checked = active,
-                onCheckedChange = onActiveChange,
-                enabled = enabled,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        if (active) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                content()
-            }
-        } else {
-            Text("模块关闭，不参与筛选。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ConditionStateRow(
-    title: String,
-    mode: CustomConditionMode,
-    enabled: Boolean,
-    onModeChange: (CustomConditionMode) -> Unit,
-) {
-    Column {
-        Text(title, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(4.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            CustomConditionMode.entries.forEach { option ->
-                FilterChip(
-                    selected = mode == option,
-                    onClick = { onModeChange(option) },
-                    enabled = enabled,
-                    label = { Text(option.title) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToggleRow(
-    title: String,
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-        )
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun IntChoiceRow(
-    title: String,
-    selected: Int,
-    values: List<Int>,
-    enabled: Boolean,
-    onSelect: (Int) -> Unit,
-) {
-    ChoiceRow(title, selected, values, enabled, label = { it.toString() }, onSelect = onSelect)
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun DoubleChoiceRow(
-    title: String,
-    selected: Double,
-    values: List<Double>,
-    enabled: Boolean,
-    label: (Double) -> String = { String.format("%.1f", it) },
-    onSelect: (Double) -> Unit,
-) {
-    ChoiceRow(title, selected, values, enabled, label = label, onSelect = onSelect)
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun <T> ChoiceRow(
-    title: String,
-    selected: T,
-    values: List<T>,
-    enabled: Boolean,
-    label: (T) -> String,
-    onSelect: (T) -> Unit,
-) {
-    Column {
-        Text(title, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(4.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            values.forEach { value ->
-                FilterChip(
-                    selected = value == selected,
-                    onClick = { onSelect(value) },
-                    enabled = enabled,
-                    label = { Text(label(value)) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AmountStepSlider(
-    title: String,
-    value: Double,
-    min: Double,
-    max: Double,
-    step: Double,
-    enabled: Boolean,
-    onValueChange: (Double) -> Unit,
-) {
-    StepSlider(
-        title = "$title：${String.format("%.0f", value / 10_000)}万",
-        value = value,
-        min = min,
-        max = max,
-        step = step,
-        enabled = enabled,
-        onValueChange = onValueChange,
-    )
-}
-
-@Composable
-private fun PercentStepSlider(
-    title: String,
-    value: Double,
-    min: Double,
-    max: Double,
-    step: Double,
-    enabled: Boolean,
-    onValueChange: (Double) -> Unit,
-) {
-    StepSlider(
-        title = "$title：${String.format("%.1f", value)}%",
-        value = value,
-        min = min,
-        max = max,
-        step = step,
-        enabled = enabled,
-        onValueChange = onValueChange,
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun StepSlider(
-    title: String,
-    value: Double,
-    min: Double,
-    max: Double,
-    step: Double,
-    enabled: Boolean,
-    onValueChange: (Double) -> Unit,
-) {
-    val stepped = value.roundToStep(min, max, step)
-    Text(title, style = MaterialTheme.typography.bodyMedium)
-    Slider(
-        value = stepped.toFloat(),
-        onValueChange = { onValueChange(it.toDouble().roundToStep(min, max, step)) },
-        valueRange = min.toFloat()..max.toFloat(),
-        steps = (((max - min) / step).roundToInt() - 1).coerceAtLeast(0),
-        enabled = enabled,
-        thumb = { RoundSliderThumb(enabled = enabled) },
     )
 }
 
@@ -1625,6 +802,7 @@ private fun SettingsPage(
     onCheckAppUpdate: () -> Unit,
     cacheInfo: MarketCacheInfo,
     onRefreshCacheInfo: () -> Unit,
+    onRebuildCache: () -> Unit,
     onRequestBackgroundPermission: () -> Unit,
 ) {
     LazyColumn(
@@ -1731,7 +909,8 @@ private fun SettingsPage(
                 Text(
                     if (cacheInfo.exists) {
                         "已发现缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线，${String.format("%.1f", cacheInfo.sizeMb)}MB。\n" +
-                            "日期范围：${cacheInfo.dateStart.ifBlank { "-" }} 到 ${cacheInfo.dateEnd.ifBlank { "-" }}。"
+                            "日期范围：${cacheInfo.dateStart.ifBlank { "-" }} 到 ${cacheInfo.dateEnd.ifBlank { "-" }}。\n" +
+                            "最新日覆盖率：${String.format("%.1f", cacheInfo.latestDateCoveragePct)}%，失败队列：${cacheInfo.failedStockCount} 只，可重试 ${cacheInfo.retryableFailedStockCount} 只。"
                     } else {
                         "未发现 market_cache.db。点击后会先联网生成缓存，再筛选。"
                     },
@@ -1762,7 +941,7 @@ private fun SettingsPage(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "点击后先判断缓存是否为收盘最新数据；已最新则直接筛选全部战法全量结果，未最新则联网更新并合并缓存。",
+                    "点击后先判断缓存是否为收盘最新数据；已最新且无失败则复用结果，未最新则只更新缺目标交易日、失败或新增股票。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                 )
@@ -1774,6 +953,20 @@ private fun SettingsPage(
                 ) {
                     Text("刷新缓存状态")
                 }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                    onClick = onRebuildCache,
+                ) {
+                    Text("重建缓存")
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "重建缓存会删除旧K线缓存并重新下载最近约320个交易日，不会清除战法选择和参数设置。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),

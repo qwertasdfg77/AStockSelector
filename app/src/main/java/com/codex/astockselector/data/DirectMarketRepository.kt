@@ -47,6 +47,26 @@ data class MarketCacheStockBars(
     val source: String,
 )
 
+data class MarketCacheStockCandidate(
+    val symbol: String,
+    val stock: MarketCacheStockRecord,
+)
+
+data class MarketCacheUpdateTarget(
+    val candidate: MarketCacheStockCandidate,
+    val days: Int,
+)
+
+data class MarketCacheUpdateFailure(
+    val candidate: MarketCacheStockCandidate,
+    val errorMessage: String,
+)
+
+data class MarketCacheUpdateResult(
+    val updates: List<MarketCacheStockBars>,
+    val failures: List<MarketCacheUpdateFailure>,
+)
+
 object DirectMarketRepository {
     private const val LIST_COUNT_URL =
         "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount"
@@ -154,16 +174,46 @@ object DirectMarketRepository {
         config: StrategyConfig,
         days: Int,
         onProgress: suspend (String) -> Unit = {},
-    ): List<MarketCacheStockBars> {
+    ): MarketCacheUpdateResult {
+        val candidates = loadCacheStockCandidates(config, onProgress)
+        return loadCacheUpdates(
+            targets = candidates.map { MarketCacheUpdateTarget(it, days) },
+            onProgress = onProgress,
+        )
+    }
+
+    suspend fun loadCacheStockCandidates(
+        config: StrategyConfig,
+        onProgress: suspend (String) -> Unit = {},
+    ): List<MarketCacheStockCandidate> {
         return withContext(Dispatchers.IO) {
-            val startedAt = System.currentTimeMillis()
             emit(onProgress, "正在读取股票列表，用于更新缓存...")
             val stocks = loadStocks(config, onProgress)
             if (stocks.isEmpty()) {
                 error("没有读取到股票列表，请检查手机网络后重试")
             }
+            stocks.map { stock ->
+                MarketCacheStockCandidate(
+                    symbol = stock.symbol,
+                    stock = stock.toCacheStockRecord(currentPrice = 0.0),
+                )
+            }
+        }
+    }
 
-            emit(onProgress, "准备更新 ${stocks.size} 只股票最近 ${days} 天K线并合并到缓存...")
+    suspend fun loadCacheUpdates(
+        targets: List<MarketCacheUpdateTarget>,
+        onProgress: suspend (String) -> Unit = {},
+    ): MarketCacheUpdateResult {
+        return withContext(Dispatchers.IO) {
+            val startedAt = System.currentTimeMillis()
+            if (targets.isEmpty()) {
+                emit(onProgress, "没有需要联网更新的股票。")
+                return@withContext MarketCacheUpdateResult(emptyList(), emptyList())
+            }
+
+            val maxDays = targets.maxOf { it.days }
+            emit(onProgress, "准备更新 ${targets.size} 只股票，最多读取最近 ${maxDays} 天K线并合并到缓存...")
             val semaphore = Semaphore(CACHE_UPDATE_CONCURRENCY)
             val completed = AtomicInteger(0)
             val success = AtomicInteger(0)
@@ -172,18 +222,26 @@ object DirectMarketRepository {
             val fallback = AtomicInteger(0)
             val abortEarly = AtomicBoolean(false)
             val lastError = AtomicReference("")
-            val total = stocks.size
+            val failures = mutableListOf<MarketCacheUpdateFailure>()
+            val total = targets.size
 
             val result = coroutineScope {
-                stocks.map { stock ->
+                targets.map { target ->
                     async {
                         semaphore.withPermit {
                             if (abortEarly.get()) return@withPermit null
+                            val stock = target.candidate.toDirectStock()
                             try {
-                                val barResult = loadCacheBarsWithFallback(stock, days)
+                                val barResult = loadCacheBarsWithFallback(stock, target.days)
                                 val bars = barResult.bars
                                 if (bars.isEmpty()) {
                                     failed.incrementAndGet()
+                                    synchronized(failures) {
+                                        failures += MarketCacheUpdateFailure(
+                                            candidate = target.candidate,
+                                            errorMessage = "K线返回空数据",
+                                        )
+                                    }
                                     null
                                 } else {
                                     success.incrementAndGet()
@@ -193,23 +251,21 @@ object DirectMarketRepository {
                                         fallback.incrementAndGet()
                                     }
                                     MarketCacheStockBars(
-                                        stock = MarketCacheStockRecord(
-                                            symbol = stock.symbol,
-                                            code = stock.profile.tsCode.substringBefore('.'),
-                                            tsCode = stock.profile.tsCode,
-                                            name = stock.profile.name,
-                                            market = stock.profile.market,
-                                            isSt = stock.profile.isSt,
-                                            currentPrice = bars.lastOrNull()?.close ?: 0.0,
-                                            currentAmount = stock.currentAmount,
-                                        ),
+                                        stock = stock.toCacheStockRecord(currentPrice = bars.lastOrNull()?.close ?: 0.0),
                                         bars = bars,
                                         source = barResult.source.name.lowercase(),
                                     )
                                 }
                             } catch (error: Exception) {
-                                lastError.compareAndSet("", error.message ?: error::class.java.simpleName)
+                                val message = error.message ?: error::class.java.simpleName
+                                lastError.compareAndSet("", message)
                                 failed.incrementAndGet()
+                                synchronized(failures) {
+                                    failures += MarketCacheUpdateFailure(
+                                        candidate = target.candidate,
+                                        errorMessage = message,
+                                    )
+                                }
                                 null
                             } finally {
                                 val done = completed.incrementAndGet()
@@ -239,7 +295,10 @@ object DirectMarketRepository {
                 onProgress,
                 "缓存更新K线读取完成：成功 ${success.get()} 只（新浪 ${sinaSuccess.get()}，备用腾讯 ${fallback.get()}），失败 ${failed.get()} 只。",
             )
-            result
+            MarketCacheUpdateResult(
+                updates = result,
+                failures = failures,
+            )
         }
     }
 
@@ -414,6 +473,7 @@ object DirectMarketRepository {
                     volume = item.volume,
                 )
             },
+            limit = days,
         )
     }
 
@@ -444,10 +504,11 @@ object DirectMarketRepository {
                     volume = row[5].asString,
                 )
             },
+            limit = days,
         )
     }
 
-    private fun buildDailyBars(stock: DirectStock, rows: List<KLineRow>): List<DailyBar> {
+    private fun buildDailyBars(stock: DirectStock, rows: List<KLineRow>, limit: Int): List<DailyBar> {
         var previousClose: Double? = null
         return rows.mapNotNull { row ->
             val tradeDate = row.day.replace("-", "")
@@ -472,7 +533,7 @@ object DirectMarketRepository {
                 volume = volume,
                 amount = stock.currentAmount,
             )
-        }.takeLast(280)
+        }.takeLast(limit)
     }
 
     private fun fetchText(
@@ -628,6 +689,31 @@ object DirectMarketRepository {
             symbol.startsWith("sh") || symbol.startsWith("sz") -> MarketSegment.MAIN
             else -> MarketSegment.UNKNOWN
         }
+
+    private fun DirectStock.toCacheStockRecord(currentPrice: Double): MarketCacheStockRecord =
+        MarketCacheStockRecord(
+            symbol = symbol,
+            code = profile.tsCode.substringBefore('.'),
+            tsCode = profile.tsCode,
+            name = profile.name,
+            market = profile.market,
+            isSt = profile.isSt,
+            currentPrice = currentPrice,
+            currentAmount = currentAmount,
+        )
+
+    private fun MarketCacheStockCandidate.toDirectStock(): DirectStock =
+        DirectStock(
+            symbol = symbol,
+            currentAmount = stock.currentAmount,
+            profile = StockProfile(
+                tsCode = stock.tsCode,
+                name = stock.name,
+                market = stock.market,
+                listDate = "",
+                isSt = stock.isSt,
+            ),
+        )
 
     private enum class MarketSource {
         SINA,

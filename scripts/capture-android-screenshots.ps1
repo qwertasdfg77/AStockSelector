@@ -25,7 +25,6 @@ Start-Sleep -Seconds 2
 
 $shots = @(
     @{ Name = "today-signals.png"; Prompt = "切到 今日信号 页面后按回车截图" },
-    @{ Name = "custom-filter.png"; Prompt = "切到 自定义筛选 页面后按回车截图" },
     @{ Name = "settings-update.png"; Prompt = "切到 设置 页面后按回车截图" },
     @{ Name = "update-progress.png"; Prompt = "启动缓存更新并出现进度后按回车截图" }
 )
