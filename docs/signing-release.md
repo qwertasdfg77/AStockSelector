@@ -70,6 +70,11 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 3. 构建正式签名 release APK。
 4. 校验 release APK 签名并生成签名报告。
 5. 把 APK、SHA256、构建信息和签名报告上传到对应 GitHub Release。
+6. 自动更新 `qwertasdfg77/astock-selector-updates` 中的 APK 与 `latest.json`。
+
+如果需要自动更新 `astock-selector-updates`，还需要配置：
+
+- `ASTOCK_UPDATES_TOKEN`：有权推送 `qwertasdfg77/astock-selector-updates` 的 GitHub Token。
 
 ## Release 附件说明
 

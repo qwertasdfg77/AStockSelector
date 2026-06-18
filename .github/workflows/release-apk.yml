@@ -28,8 +28,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+
+      - name: Check release metadata consistency
+        run: python scripts/check-release-consistency.py
 
       - name: Check signing secrets
         env:
@@ -45,7 +46,7 @@ jobs:
           fi
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Decode release keystore
         if: env.SIGNING_ENABLED == 'true'
@@ -61,7 +62,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle --no-daemon :app:assembleRelease
+        run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Verify signed release APK
         if: env.SIGNING_ENABLED == 'true'
@@ -73,6 +74,7 @@ jobs:
       - name: Collect APK files
         shell: bash
         run: |
+          VERSION_NAME="${GITHUB_REF_NAME#v}"
           mkdir -p release-files
           cp app/build/outputs/apk/debug/app-debug.apk "release-files/AStockSelector-${GITHUB_REF_NAME}-debug.apk"
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
@@ -80,6 +82,8 @@ jobs:
           fi
           if [ -f release-signing-report.txt ]; then
             cp release-signing-report.txt release-files/release-signing-report.txt
+          else
+            echo "Signing enabled: ${SIGNING_ENABLED}" > release-files/release-signing-report.txt
           fi
           {
             echo "Project: AStockSelector"
@@ -89,6 +93,15 @@ jobs:
             echo "Signing enabled: ${SIGNING_ENABLED}"
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > release-files/BUILD_INFO.txt
+          if [ -f "docs/release-v${VERSION_NAME}.md" ]; then
+            cp "docs/release-v${VERSION_NAME}.md" release-files/RELEASE_NOTES.md
+          else
+            {
+              echo "# AStockSelector ${VERSION_NAME}"
+              echo
+              echo "本次发布对应 ${GITHUB_REF_NAME}。"
+            } > release-files/RELEASE_NOTES.md
+          fi
           cd release-files
           sha256sum *.apk > SHA256SUMS.txt
 
@@ -96,11 +109,85 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: astockselector-apk-${{ github.ref_name }}
-          path: release-files/*
+          path: |
+            release-files/*.apk
+            release-files/BUILD_INFO.txt
+            release-files/SHA256SUMS.txt
+            release-files/release-signing-report.txt
 
       - name: Upload APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release-files/*
-          generate_release_notes: true
+          body_path: release-files/RELEASE_NOTES.md
+          files: |
+            release-files/*.apk
+            release-files/BUILD_INFO.txt
+            release-files/SHA256SUMS.txt
+            release-files/release-signing-report.txt
+
+      - name: Publish app update metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          ASTOCK_UPDATES_TOKEN: ${{ secrets.ASTOCK_UPDATES_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$ASTOCK_UPDATES_TOKEN" ]; then
+            echo "Missing ASTOCK_UPDATES_TOKEN secret; cannot update astock-selector-updates."
+            exit 1
+          fi
+
+          VERSION_NAME="${GITHUB_REF_NAME#v}"
+          VERSION_CODE="$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("app/build.gradle.kts").read_text(encoding="utf-8")
+          match = re.search(r"versionCode\s*=\s*(\d+)", text)
+          if not match:
+              raise SystemExit("versionCode not found")
+          print(match.group(1))
+          PY
+          )"
+
+          if [ -f "release-files/AStockSelector-${GITHUB_REF_NAME}-release.apk" ]; then
+            UPDATE_APK="release-files/AStockSelector-${GITHUB_REF_NAME}-release.apk"
+            UPDATE_FILE="app-release.apk"
+          else
+            UPDATE_APK="release-files/AStockSelector-${GITHUB_REF_NAME}-debug.apk"
+            UPDATE_FILE="app-debug.apk"
+          fi
+
+          UPDATE_SHA="$(sha256sum "$UPDATE_APK" | awk '{print $1}')"
+          UPDATE_SIZE="$(wc -c < "$UPDATE_APK" | tr -d ' ')"
+          RELEASE_NOTES="AStockSelector ${VERSION_NAME}：请查看 GitHub Release 页面获取完整中文说明。"
+
+          git clone "https://x-access-token:${ASTOCK_UPDATES_TOKEN}@github.com/qwertasdfg77/astock-selector-updates.git" update-server
+          cp "$UPDATE_APK" "update-server/$UPDATE_FILE"
+          python - <<PY
+          import json
+          from pathlib import Path
+
+          data = {
+              "versionCode": int("${VERSION_CODE}"),
+              "versionName": "${VERSION_NAME}",
+              "apkUrl": "https://raw.githubusercontent.com/qwertasdfg77/astock-selector-updates/main/${UPDATE_FILE}",
+              "apkSha256": "${UPDATE_SHA}",
+              "apkSize": int("${UPDATE_SIZE}"),
+              "releaseNotes": "${RELEASE_NOTES}",
+          }
+          Path("update-server/latest.json").write_text(
+              json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          cd update-server
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$UPDATE_FILE" latest.json
+          if git diff --cached --quiet; then
+            echo "No update metadata changes to publish."
+          else
+            git commit -m "Publish ${VERSION_NAME} update metadata"
+            git push origin main
+          fi

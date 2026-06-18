@@ -100,10 +100,9 @@
 
 - JDK 17
 - Android SDK 35
-- Gradle 8.9 或兼容版本
 
 ```powershell
-gradle --no-daemon :app:assembleDebug
+.\gradlew.bat --no-daemon :app:assembleDebug
 ```
 
 或者在 Windows 上运行：
@@ -118,10 +117,10 @@ gradle --no-daemon :app:assembleDebug
 
 仓库包含 GitHub Actions：
 
-- `android-ci.yml`：每次推送和 PR 自动构建 debug APK，用于检查项目是否能编译。
-- `release-apk.yml`：推送 `v*` tag 后自动把 APK 上传到 GitHub Release。
+- `android-ci.yml`：每次推送和 PR 自动检查版本元数据、运行单元测试并构建 debug APK。
+- `release-apk.yml`：推送 `v*` tag 后自动构建 APK、生成中文 Release 说明，并同步更新 App 内更新服务仓库。
 
-如果仓库配置了正式签名密钥，`release-apk.yml` 会同时生成正式签名 APK；未配置密钥时只上传 debug APK。签名配置见：[docs/signing-release.md](docs/signing-release.md)
+如果仓库配置了正式签名密钥，`release-apk.yml` 会同时生成正式签名 APK，并优先把正式签名 APK 写入更新服务。签名配置见：[docs/signing-release.md](docs/signing-release.md)
 
 ## 下载 APK
 

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  assemble-debug:
+  quality-check:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,8 +25,12 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+
+      - name: Check release metadata consistency
+        run: python scripts/check-release-consistency.py
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug

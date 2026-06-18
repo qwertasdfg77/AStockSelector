@@ -12,7 +12,7 @@
 - `*.jks`
 - `*.keystore`
 - `keystore.properties`
-- Tushare Token
+- 数据源 Token 或其他 API Token
 - GitHub Token
 - 缓存数据库 `market_cache.db`
 - 任何真实账户或交易相关信息
