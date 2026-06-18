@@ -8,18 +8,13 @@ updates:
       time: "09:00"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 3
+    allow:
+      - dependency-name: "com.squareup.retrofit2:*"
+      - dependency-name: "com.squareup.okhttp3:*"
     groups:
-      android-framework:
-        patterns:
-          - "androidx.*"
       network-stack:
         patterns:
           - "com.squareup.*"
-      android-build-tools:
-        patterns:
-          - "com.android.application"
-          - "org.jetbrains.kotlin.*"
-          - "org.jetbrains.kotlinx.*"
     commit-message:
       prefix: "deps(android)"
     labels:
