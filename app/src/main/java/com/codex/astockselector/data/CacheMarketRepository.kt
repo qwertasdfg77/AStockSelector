@@ -65,7 +65,7 @@ private data class CacheFailureState(
 
 object CacheMarketRepository {
     private const val DB_NAME = "market_cache.db"
-    private const val CACHE_KEEP_TRADE_DAYS = 320
+    private const val CACHE_KEEP_TRADE_DAYS = 270
     private const val SIGNAL_LOOKBACK_TRADE_DAYS = 270
     private const val INCREMENTAL_UPDATE_DAYS = 40
     private const val EVALUATION_BATCH_SIZE = 64

@@ -1,12 +1,12 @@
-# AStockSelector 0.2.2 下载页
+# AStockSelector 0.2.3 下载页
 
-这是缓存更新优化版本，重点提升手机端每日更新速度和失败恢复能力。
+这是本地筛选和缓存更新优化版本，重点减少筛选计算开销、降低联网更新调度开销，并将缓存窗口回退到约 270 个交易日。
 
 ## 下载
 
-- APK：`AStockSelector-0.2.2-debug.apk`
-- 下载地址：<https://github.com/qwertasdfg77/AStockSelector/releases/download/v0.2.2/AStockSelector-0.2.2-debug.apk>
-- SHA256：`857450982e7ef8e93107760b0afbf87a4b475bd9e1c285b430cbd370afc6bbde`
+- APK：`AStockSelector-v0.2.3-debug.apk`
+- 下载地址：<https://github.com/qwertasdfg77/AStockSelector/releases/download/v0.2.3/AStockSelector-v0.2.3-debug.apk>
+- SHA256：`1d887eb53138c7f83cd501c152fee2a5717ce9eb83ddcb0fbef590518fb2201a`
 
 ## 安装
 
@@ -27,13 +27,11 @@
 
 ## 主要变化
 
-- 智能更新改为按股票缺口增量更新，只补缺目标交易日、失败或新增股票。
-- 新增缓存失败队列，失败股票会持久保存并在后续优先补读。
-- 缓存已最新但存在失败队列时，只补失败股票。
-- 新增股票或 K 线不足 270 条时补最近约 270 个交易日。
-- 同一股票当天限制重复失败重试次数，避免异常数据拖慢整体更新。
-- 设置页新增“重建缓存”按钮，只重建 K 线缓存，不清除 App 设置。
-- 缓存状态新增最新日覆盖率、失败队列数量和可重试失败数量。
+- 本地策略筛选的 MA5/10/20/60/250 改为前缀和计算，减少重复均线计算。
+- 缓存联网更新改为固定 worker 池，避免为每只股票创建一个协程。
+- HTTP 重试等待改为协程 delay，避免阻塞后台线程。
+- 缓存保留窗口回退为约 270 个交易日。
+- 新增策略单元测试，覆盖年线首板、九阳蓄势、K 线不足和 ST 股票过滤。
 
 ## 已知限制
 

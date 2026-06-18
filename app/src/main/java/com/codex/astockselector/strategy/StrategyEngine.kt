@@ -27,17 +27,19 @@ object StrategyEngine {
         ).sortedWith(compareByDescending<StrategySignal> { it.level.ordinal * -1 }.thenByDescending { it.score })
     }
 
-    private fun enrich(bars: List<DailyBar>): List<EnrichedBar> =
-        bars.mapIndexed { index, bar ->
+    private fun enrich(bars: List<DailyBar>): List<EnrichedBar> {
+        val closeSums = bars.runningCloseSums()
+        return bars.mapIndexed { index, bar ->
             EnrichedBar(
                 bar = bar,
-                ma5 = bars.movingAverage(index, 5),
-                ma10 = bars.movingAverage(index, 10),
-                ma20 = bars.movingAverage(index, 20),
-                ma60 = bars.movingAverage(index, 60),
-                ma250 = bars.movingAverage(index, 250),
+                ma5 = closeSums.movingAverage(index, 5),
+                ma10 = closeSums.movingAverage(index, 10),
+                ma20 = closeSums.movingAverage(index, 20),
+                ma60 = closeSums.movingAverage(index, 60),
+                ma250 = closeSums.movingAverage(index, 250),
             )
         }
+    }
 
     private fun evaluateFirstBoard(
         stock: StockProfile,
@@ -376,7 +378,24 @@ object StrategyEngine {
 
     private fun List<DailyBar>.movingAverage(index: Int, period: Int): Double? {
         if (index + 1 < period) return null
-        return subList(index + 1 - period, index + 1).map { it.close }.average()
+        var sum = 0.0
+        for (i in index + 1 - period..index) {
+            sum += this[i].close
+        }
+        return sum / period
+    }
+
+    private fun List<DailyBar>.runningCloseSums(): DoubleArray {
+        val sums = DoubleArray(size + 1)
+        forEachIndexed { index, bar ->
+            sums[index + 1] = sums[index] + bar.close
+        }
+        return sums
+    }
+
+    private fun DoubleArray.movingAverage(index: Int, period: Int): Double? {
+        if (index + 1 < period) return null
+        return (this[index + 1] - this[index + 1 - period]) / period
     }
 
     private fun pct(value: Double): String = "${format(value)}%"

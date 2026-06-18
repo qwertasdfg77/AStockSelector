@@ -214,7 +214,6 @@ object DirectMarketRepository {
 
             val maxDays = targets.maxOf { it.days }
             emit(onProgress, "准备更新 ${targets.size} 只股票，最多读取最近 ${maxDays} 天K线并合并到缓存...")
-            val semaphore = Semaphore(CACHE_UPDATE_CONCURRENCY)
             val completed = AtomicInteger(0)
             val success = AtomicInteger(0)
             val sinaSuccess = AtomicInteger(0)
@@ -224,12 +223,16 @@ object DirectMarketRepository {
             val lastError = AtomicReference("")
             val failures = mutableListOf<MarketCacheUpdateFailure>()
             val total = targets.size
+            val nextIndex = AtomicInteger(0)
 
             val result = coroutineScope {
-                targets.map { target ->
+                List(minOf(CACHE_UPDATE_CONCURRENCY, total)) {
                     async {
-                        semaphore.withPermit {
-                            if (abortEarly.get()) return@withPermit null
+                        val workerResults = mutableListOf<MarketCacheStockBars>()
+                        while (!abortEarly.get()) {
+                            val index = nextIndex.getAndIncrement()
+                            if (index >= total) break
+                            val target = targets[index]
                             val stock = target.candidate.toDirectStock()
                             try {
                                 val barResult = loadCacheBarsWithFallback(stock, target.days)
@@ -242,7 +245,6 @@ object DirectMarketRepository {
                                             errorMessage = "K线返回空数据",
                                         )
                                     }
-                                    null
                                 } else {
                                     success.incrementAndGet()
                                     if (barResult.source == MarketSource.SINA) {
@@ -250,7 +252,7 @@ object DirectMarketRepository {
                                     } else {
                                         fallback.incrementAndGet()
                                     }
-                                    MarketCacheStockBars(
+                                    workerResults += MarketCacheStockBars(
                                         stock = stock.toCacheStockRecord(currentPrice = bars.lastOrNull()?.close ?: 0.0),
                                         bars = bars,
                                         source = barResult.source.name.lowercase(),
@@ -266,7 +268,6 @@ object DirectMarketRepository {
                                         errorMessage = message,
                                     )
                                 }
-                                null
                             } finally {
                                 val done = completed.incrementAndGet()
                                 if (done >= CACHE_EARLY_FAILURE_CHECK_COUNT && success.get() == 0) {
@@ -282,8 +283,9 @@ object DirectMarketRepository {
                                 }
                             }
                         }
+                        workerResults
                     }
-                }.awaitAll().filterNotNull()
+                }.awaitAll().flatten()
             }
 
             if (result.isEmpty()) {
@@ -445,7 +447,7 @@ object DirectMarketRepository {
         return tencentResult
     }
 
-    private fun loadSinaBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
+    private suspend fun loadSinaBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
         val json = fetchText(
             url = SINA_KLINE_URL,
             params = mapOf(
@@ -477,7 +479,7 @@ object DirectMarketRepository {
         )
     }
 
-    private fun loadTencentBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
+    private suspend fun loadTencentBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
         val json = fetchText(
             url = TENCENT_KLINE_URL,
             params = mapOf("param" to "${stock.symbol},day,,,$days,qfq"),
@@ -536,7 +538,7 @@ object DirectMarketRepository {
         }.takeLast(limit)
     }
 
-    private fun fetchText(
+    private suspend fun fetchText(
         url: String,
         params: Map<String, String>,
         referer: String,
@@ -554,7 +556,7 @@ object DirectMarketRepository {
         return fetchRawText(fullUrl, referer, sourceName)
     }
 
-    private fun fetchRawText(fullUrl: String, referer: String, sourceName: String): String {
+    private suspend fun fetchRawText(fullUrl: String, referer: String, sourceName: String): String {
         var lastError: Throwable? = null
         repeat(RETRY_COUNT) { attempt ->
             try {
@@ -576,7 +578,7 @@ object DirectMarketRepository {
                 lastError = error
             }
             if (attempt < RETRY_COUNT - 1) {
-                Thread.sleep((attempt + 1) * 900L)
+                delay((attempt + 1) * 900L)
             }
         }
         error("$sourceName 请求失败：${lastError?.message ?: "未知错误"}")

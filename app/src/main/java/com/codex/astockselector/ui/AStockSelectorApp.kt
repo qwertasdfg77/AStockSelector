@@ -963,7 +963,7 @@ private fun SettingsPage(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "重建缓存会删除旧K线缓存并重新下载最近约320个交易日，不会清除战法选择和参数设置。",
+                    "重建缓存会删除旧K线缓存并重新下载最近约270个交易日，不会清除战法选择和参数设置。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                 )
@@ -976,7 +976,7 @@ private fun SettingsPage(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "联网更新会在前台服务中后台运行，更新完成后自动清理过早K线，只保留最近约320个交易日。",
+                    "联网更新会在前台服务中后台运行，更新完成后自动清理过早K线，只保留最近约270个交易日。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                 )

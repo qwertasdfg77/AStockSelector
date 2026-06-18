@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_cache_update_failures_retry
 --         SELECT DISTINCT trade_date
 --         FROM daily_bars
 --         ORDER BY trade_date DESC
---         LIMIT 320
+--         LIMIT 270
 --     )
 -- );
 
