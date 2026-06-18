@@ -76,7 +76,7 @@ object AppUpdateRepository {
 
     suspend fun checkLatest(context: Context): AppUpdateCheckResult = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url(LATEST_JSON_URL)
+            .url(LATEST_JSON_URL.cacheBustedUrl())
             .header("Cache-Control", "no-cache")
             .build()
         val body = http.newCall(request).execute().use { response ->
@@ -177,7 +177,7 @@ object AppUpdateRepository {
         finalFile.delete()
 
         val request = Request.Builder()
-            .url(latest.apkUrl)
+            .url(latest.apkUrl.cacheBustedUrl())
             .header("Cache-Control", "no-cache")
             .build()
 
@@ -297,5 +297,10 @@ object AppUpdateRepository {
             }
         }
         return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+
+    private fun String.cacheBustedUrl(): String {
+        val separator = if (contains("?")) "&" else "?"
+        return "$this${separator}cache_bust=${System.currentTimeMillis()}"
     }
 }
