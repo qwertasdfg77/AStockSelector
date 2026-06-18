@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -45,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -805,6 +807,36 @@ private fun SettingsPage(
     onRebuildCache: () -> Unit,
     onRequestBackgroundPermission: () -> Unit,
 ) {
+    var showRebuildCacheDialog by remember { mutableStateOf(false) }
+
+    if (showRebuildCacheDialog) {
+        AlertDialog(
+            onDismissRequest = { showRebuildCacheDialog = false },
+            title = { Text("警告：确认重建缓存？") },
+            text = {
+                Text(
+                    "这会删除手机上的旧K线缓存，并重新联网下载最近约270个交易日的数据。过程可能耗时较长，也会消耗流量；如果中途网络失败，需要重新更新或再次重建。\n\n" +
+                        "不会清除战法选择和参数设置。建议只在缓存异常、更新反复失败、数据缺失或筛选结果明显不对时使用。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRebuildCacheDialog = false
+                        onRebuildCache()
+                    },
+                ) {
+                    Text("删除并重建")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRebuildCacheDialog = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -957,7 +989,7 @@ private fun SettingsPage(
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isLoading,
-                    onClick = onRebuildCache,
+                    onClick = { showRebuildCacheDialog = true },
                 ) {
                     Text("重建缓存")
                 }

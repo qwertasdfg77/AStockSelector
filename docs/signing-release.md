@@ -86,8 +86,8 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 ## 发布 tag 示例
 
 ```powershell
-git tag v0.2.3
-git push origin v0.2.3
+git tag v0.2.4
+git push origin v0.2.4
 ```
 
 注意：每次发布 APK 都应同步提升 `versionName` 和 `versionCode`。
