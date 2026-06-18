@@ -50,8 +50,8 @@
 
 ## 当前版本
 
-- App 版本：`0.2.6`
-- Android `versionCode`：`18`
+- App 版本：`0.2.7`
+- Android `versionCode`：`19`
 - minSdk：`26`
 - targetSdk：`35`
 - compileSdk：`35`
@@ -118,9 +118,9 @@
 仓库包含 GitHub Actions：
 
 - `android-ci.yml`：每次推送和 PR 自动检查版本元数据、运行单元测试并构建 debug APK。
-- `release-apk.yml`：推送 `v*` tag 后自动构建 APK、生成中文 Release 说明，并同步更新 App 内更新服务仓库。
+- `release-apk.yml`：推送 `v*` tag 后自动构建 APK、生成中文 Release 说明，校验签名、APK SHA256、大小和更新元数据后，同步更新 App 内更新服务仓库。
 
-如果仓库配置了正式签名密钥，`release-apk.yml` 会同时生成正式签名 APK，并优先把正式签名 APK 写入更新服务。签名配置见：[docs/signing-release.md](docs/signing-release.md)
+标签发布必须配置正式签名密钥，否则不会把 APK 写入更新服务。签名配置见：[docs/signing-release.md](docs/signing-release.md)
 
 ## 下载 APK
 
@@ -132,7 +132,7 @@
 
 - <https://github.com/qwertasdfg77/astock-selector-updates>
 
-App 内“检测程序更新”会读取：
+App 内“检测程序更新”会先读取当前版本、最新版本和更新说明；发现新版后，用户再点击“下载更新”，下载完成会校验 APK SHA256 和大小，通过后才打开系统安装器。更新信息读取：
 
 - <https://raw.githubusercontent.com/qwertasdfg77/astock-selector-updates/main/latest.json>
 

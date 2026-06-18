@@ -1,7 +1,9 @@
 package com.codex.astockselector.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.File
 
 class AppUpdateRepositoryTest {
     @Test
@@ -42,4 +44,80 @@ class AppUpdateRepositoryTest {
         assertEquals("", update.apkSha256)
         assertEquals(0L, update.apkSize)
     }
+
+    @Test
+    fun validateUpdateInfoRejectsInvalidSha256() {
+        val update = validUpdateInfo().copy(apkSha256 = "not-a-sha")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            AppUpdateRepository.validateUpdateInfo(update)
+        }
+    }
+
+    @Test
+    fun validateUpdateInfoRejectsMissingSize() {
+        val update = validUpdateInfo().copy(apkSize = 0L)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            AppUpdateRepository.validateUpdateInfo(update)
+        }
+    }
+
+    @Test
+    fun verifyDownloadedApkReturnsShaWhenSizeAndHashMatch() {
+        val apk = writeTempApk("release-apk")
+        val update = validUpdateInfo(
+            apkSha256 = "a8f3d9dba2d6f10a92a50ab7ea364aa6addded90be1b37f8abc8c7c3843b9ae1",
+            apkSize = apk.length(),
+        )
+
+        val actualSha = AppUpdateRepository.verifyDownloadedApk(apk, update)
+
+        assertEquals(update.apkSha256, actualSha)
+    }
+
+    @Test
+    fun verifyDownloadedApkRejectsShaMismatch() {
+        val apk = writeTempApk("release-apk")
+        val update = validUpdateInfo(
+            apkSha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+            apkSize = apk.length(),
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            AppUpdateRepository.verifyDownloadedApk(apk, update)
+        }
+    }
+
+    @Test
+    fun verifyDownloadedApkRejectsSizeMismatch() {
+        val apk = writeTempApk("release-apk")
+        val update = validUpdateInfo(
+            apkSha256 = "a8f3d9dba2d6f10a92a50ab7ea364aa6addded90be1b37f8abc8c7c3843b9ae1",
+            apkSize = apk.length() + 1,
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            AppUpdateRepository.verifyDownloadedApk(apk, update)
+        }
+    }
+
+    private fun validUpdateInfo(
+        apkSha256: String = "a8f3d9dba2d6f10a92a50ab7ea364aa6addded90be1b37f8abc8c7c3843b9ae1",
+        apkSize: Long = 11L,
+    ): AppUpdateInfo =
+        AppUpdateInfo(
+            versionCode = 18L,
+            versionName = "0.2.6",
+            apkUrl = "https://example.com/app-release.apk",
+            apkSha256 = apkSha256,
+            apkSize = apkSize,
+            releaseNotes = "测试更新",
+        )
+
+    private fun writeTempApk(content: String): File =
+        File.createTempFile("astock-update-test-", ".apk").apply {
+            deleteOnExit()
+            writeText(content)
+        }
 }

@@ -66,11 +66,12 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 之后推送 `v*` tag 时，`.github/workflows/release-apk.yml` 会自动：
 
 1. 构建 debug APK。
-2. 如果 secrets 完整，解码 keystore。
+2. 检查签名 secrets 是否完整；标签发布缺少签名会直接失败。
 3. 构建正式签名 release APK。
 4. 校验 release APK 签名并生成签名报告。
-5. 把 APK、SHA256、构建信息和签名报告上传到对应 GitHub Release。
-6. 自动更新 `qwertasdfg77/astock-selector-updates` 中的 APK 与 `latest.json`。
+5. 校验 tag、`versionName`、`latest.json`、APK SHA256、APK 大小和签名报告。
+6. 把 APK、SHA256、构建信息和签名报告上传到对应 GitHub Release。
+7. 自动更新 `qwertasdfg77/astock-selector-updates` 中的 APK 与 `latest.json`。
 
 如果需要自动更新 `astock-selector-updates`，还需要配置：
 
@@ -81,12 +82,12 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 自动发布后通常会看到这些文件：
 
 - `AStockSelector-v版本-debug.apk`：调试包，适合测试。
-- `AStockSelector-v版本-release.apk`：正式签名包，只有 secrets 完整时生成。
+- `AStockSelector-v版本-release.apk`：正式签名包；标签发布必须生成这个包。
 - `SHA256SUMS.txt`：APK 校验值。
 - `BUILD_INFO.txt`：构建时间、提交、签名状态和 Actions 链接。
 - `release-signing-report.txt`：正式签名 APK 的证书校验报告。
 
-普通用户优先安装 `release.apk`。如果没有 `release.apk`，说明当前版本还没有配置正式签名密钥。
+普通用户优先安装 `release.apk`。如果标签发布没有 `release.apk`，说明发布流程没有通过，不应作为 App 内更新来源。
 
 ## 发布 tag 示例
 

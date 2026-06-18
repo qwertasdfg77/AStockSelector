@@ -7,7 +7,21 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      android-framework:
+        patterns:
+          - "androidx.*"
+      network-stack:
+        patterns:
+          - "com.squareup.*"
+      android-build-tools:
+        patterns:
+          - "com.android.application"
+          - "org.jetbrains.kotlin.*"
+          - "org.jetbrains.kotlinx.*"
+    commit-message:
+      prefix: "deps(android)"
     labels:
       - "dependencies"
       - "android"
@@ -19,7 +33,13 @@ updates:
       day: "monday"
       time: "09:30"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      workflow-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(actions)"
     labels:
       - "dependencies"
       - "github-actions"

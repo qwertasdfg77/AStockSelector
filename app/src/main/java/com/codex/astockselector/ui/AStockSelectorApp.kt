@@ -64,6 +64,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.codex.astockselector.data.AppUpdateCheckResult
+import com.codex.astockselector.data.AppUpdateDownloadProgress
+import com.codex.astockselector.data.AppUpdateInfo
 import com.codex.astockselector.data.AppUpdateRepository
 import com.codex.astockselector.data.CacheMarketRepository
 import com.codex.astockselector.data.LastSignalStore
@@ -75,7 +78,9 @@ import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
 import com.codex.astockselector.model.strategyRuleKey
 import com.codex.astockselector.service.MarketUpdateService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,8 +99,16 @@ fun AStockSelectorApp() {
     var statusText by remember { mutableStateOf(updateState.statusText) }
     var isLoading by remember { mutableStateOf(updateState.isRunning) }
     var cacheInfo by remember { mutableStateOf(MarketCacheInfo()) }
-    var appUpdateStatus by remember { mutableStateOf("尚未检测程序更新。") }
+    var pendingAppUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var appUpdateStatus by remember {
+        mutableStateOf("当前版本：${AppUpdateRepository.currentVersionLabel(context)}。尚未检测程序更新。")
+    }
     var isCheckingAppUpdate by remember { mutableStateOf(false) }
+    val appUpdateButtonText = when {
+        isCheckingAppUpdate -> "正在处理程序更新..."
+        pendingAppUpdate != null -> "下载更新 ${pendingAppUpdate?.versionName.orEmpty()}"
+        else -> "检测程序更新"
+    }
 
     val config = StrategyConfig(
         nearMaPct = nearMaPct,
@@ -263,26 +276,55 @@ fun AStockSelectorApp() {
     fun checkAppUpdate() {
         if (isCheckingAppUpdate) return
         isCheckingAppUpdate = true
-        appUpdateStatus = "正在从 GitHub 检测程序更新..."
+        pendingAppUpdate = null
+        appUpdateStatus = "当前版本：${AppUpdateRepository.currentVersionLabel(context)}。\n正在从 GitHub 检测程序更新..."
         scope.launch {
             runCatching {
                 AppUpdateRepository.checkLatest(context)
             }.onSuccess { result ->
                 if (result.hasUpdate) {
-                    appUpdateStatus = "发现新版 ${result.latest.versionName}，正在下载并校验安装包..."
-                    runCatching {
-                        AppUpdateRepository.downloadAndVerify(context, result.latest)
-                    }.onSuccess { apk ->
-                        appUpdateStatus = "新版 ${result.latest.versionName} 已通过 SHA256 校验，正在打开安装器。"
-                        context.startActivity(AppUpdateRepository.installIntent(context, apk))
-                    }.onFailure { error ->
-                        appUpdateStatus = "新版 ${result.latest.versionName} 下载或校验失败：${error.message ?: "未知错误"}"
-                    }
+                    pendingAppUpdate = result.latest
+                    appUpdateStatus = buildAppUpdateAvailableStatus(result)
                 } else {
-                    appUpdateStatus = "当前已是最新版本：${result.latest.versionName}。"
+                    pendingAppUpdate = null
+                    appUpdateStatus = buildAppUpdateCurrentStatus(result)
                 }
             }.onFailure { error ->
+                pendingAppUpdate = null
                 appUpdateStatus = "检测程序更新失败：${error.message ?: "未知错误"}"
+            }
+            isCheckingAppUpdate = false
+        }
+    }
+
+    fun downloadPendingAppUpdate() {
+        val latest = pendingAppUpdate ?: run {
+            checkAppUpdate()
+            return
+        }
+        if (isCheckingAppUpdate) return
+        isCheckingAppUpdate = true
+        val currentLabel = AppUpdateRepository.currentVersionLabel(context)
+        appUpdateStatus = "当前版本：$currentLabel。\n准备下载新版 ${latest.versionName}..."
+        scope.launch {
+            runCatching {
+                AppUpdateRepository.downloadAndVerify(context, latest) { progress ->
+                    withContext(Dispatchers.Main) {
+                        appUpdateStatus = buildAppUpdateDownloadStatus(
+                            currentLabel = currentLabel,
+                            latest = latest,
+                            progress = progress,
+                        )
+                    }
+                }
+            }.onSuccess { apk ->
+                pendingAppUpdate = null
+                appUpdateStatus =
+                    "当前版本：$currentLabel。\n新版 ${latest.versionName} 已通过 SHA256 和大小校验，正在打开安装器。"
+                context.startActivity(AppUpdateRepository.installIntent(context, apk))
+            }.onFailure { error ->
+                appUpdateStatus =
+                    "当前版本：$currentLabel。\n新版 ${latest.versionName} 下载或校验失败：${error.message ?: "未知错误"}\n可再次点击“下载更新”重试。"
             }
             isCheckingAppUpdate = false
         }
@@ -358,8 +400,15 @@ fun AStockSelectorApp() {
                     isLoading = isLoading,
                     onSmartUpdateData = ::smartUpdateData,
                     appUpdateStatus = appUpdateStatus,
+                    appUpdateButtonText = appUpdateButtonText,
                     isCheckingAppUpdate = isCheckingAppUpdate,
-                    onCheckAppUpdate = ::checkAppUpdate,
+                    onAppUpdateAction = {
+                        if (pendingAppUpdate == null) {
+                            checkAppUpdate()
+                        } else {
+                            downloadPendingAppUpdate()
+                        }
+                    },
                     cacheInfo = cacheInfo,
                     onRefreshCacheInfo = ::refreshCacheInfo,
                     onRebuildCache = ::rebuildCache,
@@ -447,6 +496,37 @@ private fun String.normalizeSignalRuleKey(): String =
                 ?: pieces[1]
             "${pieces[0]}=$value"
         }
+    }
+
+private fun buildAppUpdateAvailableStatus(result: AppUpdateCheckResult): String =
+    "当前版本：${result.currentVersion.label}。\n" +
+        "发现新版：${result.latest.versionName}（${result.latest.versionCode}）。\n" +
+        "更新说明：${result.latest.releaseNotes.ifBlank { "暂无更新说明。" }}\n" +
+        "点击“下载更新”后会下载 APK，校验 SHA256 和大小，通过后再打开安装器。"
+
+private fun buildAppUpdateCurrentStatus(result: AppUpdateCheckResult): String =
+    "当前版本：${result.currentVersion.label}。\n" +
+        "最新版本：${result.latest.versionName}（${result.latest.versionCode}）。\n" +
+        "当前已是最新版本。"
+
+private fun buildAppUpdateDownloadStatus(
+    currentLabel: String,
+    latest: AppUpdateInfo,
+    progress: AppUpdateDownloadProgress,
+): String {
+    val totalMb = progress.totalBytes.toMegabytesText()
+    val downloadedMb = progress.bytesDownloaded.toMegabytesText()
+    val percentText = progress.percent?.let { "$it%" } ?: "计算中"
+    return "当前版本：$currentLabel。\n" +
+        "正在下载新版 ${latest.versionName}：$percentText（$downloadedMb / $totalMb）。\n" +
+        "第 ${progress.attempt}/${progress.maxAttempts} 次尝试，下载完成后会自动校验安装包。"
+}
+
+private fun Long.toMegabytesText(): String =
+    if (this > 0L) {
+        String.format("%.1fMB", this / 1024.0 / 1024.0)
+    } else {
+        "未知大小"
     }
 
 private fun Double.toNearMaStep(): Double =
@@ -786,8 +866,9 @@ private fun SettingsPage(
     isLoading: Boolean,
     onSmartUpdateData: () -> Unit,
     appUpdateStatus: String,
+    appUpdateButtonText: String,
     isCheckingAppUpdate: Boolean,
-    onCheckAppUpdate: () -> Unit,
+    onAppUpdateAction: () -> Unit,
     cacheInfo: MarketCacheInfo,
     onRefreshCacheInfo: () -> Unit,
     onRebuildCache: () -> Unit,
@@ -947,9 +1028,9 @@ private fun SettingsPage(
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isLoading && !isCheckingAppUpdate,
-                    onClick = onCheckAppUpdate,
+                    onClick = onAppUpdateAction,
                 ) {
-                    Text(if (isCheckingAppUpdate) "正在检测程序更新..." else "检测程序更新")
+                    Text(appUpdateButtonText)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
