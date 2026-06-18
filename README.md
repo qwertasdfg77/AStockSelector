@@ -50,8 +50,8 @@
 
 ## 当前版本
 
-- App 版本：`0.2.8`
-- Android `versionCode`：`20`
+- App 版本：`0.2.9`
+- Android `versionCode`：`21`
 - minSdk：`26`
 - targetSdk：`35`
 - compileSdk：`35`

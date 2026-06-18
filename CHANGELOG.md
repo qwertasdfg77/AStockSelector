@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.2.9
+
+- Retrofit 依赖升级到 2.12.0，保持网络请求栈在当前 Android 基线下可通过测试。
+- 发布 Action 升级到 softprops/action-gh-release v3。
+- Dependabot 暂停 AndroidX 和构建工具类自动升级，避免在 compileSdk 35 / AGP 8.7.x / Gradle 8.9 基线上反复打开失败 PR。
+
 ## 0.2.8
 
 - 更新检测和 APK 下载增加 cache-bust 参数，避免 GitHub raw 同名文件缓存导致手机读到旧版本。
