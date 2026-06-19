@@ -132,12 +132,12 @@ class MarketUpdateService : Service() {
     }
 
     private fun buildNotification(text: String, ongoing: Boolean): Notification {
-        val openIntent = Intent(this, MainActivity::class.java)
+        val openIntent = Intent().setClassName(packageName, MainActivity::class.java.name)
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
             openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
