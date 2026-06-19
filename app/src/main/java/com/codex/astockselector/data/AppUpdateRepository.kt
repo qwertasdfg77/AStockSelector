@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -44,6 +45,7 @@ data class AppUpdateDownloadProgress(
     val maxAttempts: Int,
     val bytesDownloaded: Long,
     val totalBytes: Long,
+    val message: String = "",
 ) {
     val percent: Int? =
         if (totalBytes > 0L) {
@@ -140,8 +142,9 @@ object AppUpdateRepository {
             val file = File(updateDir, "AStockSelector-${latest.versionName}.apk")
             val partFile = File(updateDir, "${file.name}.part")
             var lastError: Throwable? = null
+            val attempts = maxAttempts.coerceAtLeast(1)
 
-            repeat(maxAttempts.coerceAtLeast(1)) { index ->
+            repeat(attempts) { index ->
                 val attempt = index + 1
                 try {
                     return@withContext downloadOnce(
@@ -149,20 +152,33 @@ object AppUpdateRepository {
                         finalFile = file,
                         partFile = partFile,
                         attempt = attempt,
-                        maxAttempts = maxAttempts.coerceAtLeast(1),
+                        maxAttempts = attempts,
                         onProgress = onProgress,
                     )
+                } catch (error: CancellationException) {
+                    cleanStaleUpdateFiles(updateDir)
+                    throw error
                 } catch (error: Throwable) {
                     lastError = error
                     partFile.delete()
                     file.delete()
-                    if (attempt < maxAttempts.coerceAtLeast(1)) {
+                    if (attempt < attempts) {
+                        onProgress(
+                            AppUpdateDownloadProgress(
+                                attempt = attempt,
+                                maxAttempts = attempts,
+                                bytesDownloaded = 0L,
+                                totalBytes = latest.apkSize,
+                                message = "第 $attempt 次下载失败：${error.readableMessage()}，即将重试。",
+                            ),
+                        )
                         delay(1_000L * attempt)
                     }
                 }
             }
 
-            error("APK 下载失败，已重试 ${maxAttempts.coerceAtLeast(1)} 次：${lastError?.message ?: "未知错误"}")
+            cleanStaleUpdateFiles(updateDir)
+            error("APK 下载失败，已重试 $attempts 次。最后原因：${lastError.readableMessage()}。已清理未完成安装包，可再次点击下载更新。")
         }
 
     private suspend fun downloadOnce(
@@ -183,55 +199,72 @@ object AppUpdateRepository {
 
         var bytesWritten = 0L
         var lastProgressBytes = 0L
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                error("APK 下载失败：HTTP ${response.code}")
-            }
-            val body = response.body ?: error("APK 下载失败：响应为空")
-            val totalBytes = if (latest.apkSize > 0L) latest.apkSize else body.contentLength()
-            onProgress(
-                AppUpdateDownloadProgress(
-                    attempt = attempt,
-                    maxAttempts = maxAttempts,
-                    bytesDownloaded = 0L,
-                    totalBytes = totalBytes,
-                ),
-            )
+        try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    error("APK 下载失败：HTTP ${response.code}")
+                }
+                val body = response.body ?: error("APK 下载失败：响应为空")
+                val totalBytes = if (latest.apkSize > 0L) latest.apkSize else body.contentLength()
+                onProgress(
+                    AppUpdateDownloadProgress(
+                        attempt = attempt,
+                        maxAttempts = maxAttempts,
+                        bytesDownloaded = 0L,
+                        totalBytes = totalBytes,
+                        message = "正在连接 APK 下载地址。",
+                    ),
+                )
 
-            body.byteStream().use { input ->
-                partFile.outputStream().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        bytesWritten += read
+                body.byteStream().use { input ->
+                    partFile.outputStream().use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            bytesWritten += read
 
-                        if (
-                            bytesWritten - lastProgressBytes >= PROGRESS_STEP_BYTES ||
-                            (totalBytes > 0L && bytesWritten >= totalBytes)
-                        ) {
-                            lastProgressBytes = bytesWritten
-                            onProgress(
-                                AppUpdateDownloadProgress(
-                                    attempt = attempt,
-                                    maxAttempts = maxAttempts,
-                                    bytesDownloaded = bytesWritten,
-                                    totalBytes = totalBytes,
-                                ),
-                            )
+                            if (
+                                bytesWritten - lastProgressBytes >= PROGRESS_STEP_BYTES ||
+                                (totalBytes > 0L && bytesWritten >= totalBytes)
+                            ) {
+                                lastProgressBytes = bytesWritten
+                                onProgress(
+                                    AppUpdateDownloadProgress(
+                                        attempt = attempt,
+                                        maxAttempts = maxAttempts,
+                                        bytesDownloaded = bytesWritten,
+                                        totalBytes = totalBytes,
+                                        message = "正在下载 APK。",
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        val actualSha256 = verifyDownloadedApk(partFile, latest)
-        if (!partFile.renameTo(finalFile)) {
-            partFile.copyTo(finalFile, overwrite = true)
+            onProgress(
+                AppUpdateDownloadProgress(
+                    attempt = attempt,
+                    maxAttempts = maxAttempts,
+                    bytesDownloaded = bytesWritten,
+                    totalBytes = latest.apkSize,
+                    message = "下载完成，正在校验 SHA256 和文件大小。",
+                ),
+            )
+            val actualSha256 = verifyDownloadedApk(partFile, latest)
+            if (!partFile.renameTo(finalFile)) {
+                partFile.copyTo(finalFile, overwrite = true)
+                partFile.delete()
+            }
+            return VerifiedUpdateApk(file = finalFile, sha256 = actualSha256)
+        } catch (error: Throwable) {
             partFile.delete()
+            finalFile.delete()
+            throw error
         }
-        return VerifiedUpdateApk(file = finalFile, sha256 = actualSha256)
     }
 
     fun verifyDownloadedApk(file: File, latest: AppUpdateInfo): String {
@@ -259,6 +292,9 @@ object AppUpdateRepository {
             }
             ?.forEach { it.delete() }
     }
+
+    private fun Throwable?.readableMessage(): String =
+        this?.message?.takeIf { it.isNotBlank() } ?: "未知错误"
 
     fun installIntent(context: Context, apk: VerifiedUpdateApk): Intent {
         val uri = FileProvider.getUriForFile(

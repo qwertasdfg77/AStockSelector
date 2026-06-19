@@ -38,6 +38,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -100,11 +101,16 @@ fun AStockSelectorApp() {
     var isLoading by remember { mutableStateOf(updateState.isRunning) }
     var cacheInfo by remember { mutableStateOf(MarketCacheInfo()) }
     var pendingAppUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var appUpdateDownloadProgress by remember { mutableStateOf<AppUpdateDownloadProgress?>(null) }
     var appUpdateStatus by remember {
         mutableStateOf("当前版本：${AppUpdateRepository.currentVersionLabel(context)}。尚未检测程序更新。")
     }
     var isCheckingAppUpdate by remember { mutableStateOf(false) }
     val appUpdateButtonText = when {
+        appUpdateDownloadProgress != null -> {
+            val percent = appUpdateDownloadProgress?.percent?.let { "$it%" } ?: "下载中"
+            "正在下载 $percent"
+        }
         isCheckingAppUpdate -> "正在处理程序更新..."
         pendingAppUpdate != null -> "下载更新 ${pendingAppUpdate?.versionName.orEmpty()}"
         else -> "检测程序更新"
@@ -277,6 +283,7 @@ fun AStockSelectorApp() {
         if (isCheckingAppUpdate) return
         isCheckingAppUpdate = true
         pendingAppUpdate = null
+        appUpdateDownloadProgress = null
         appUpdateStatus = "当前版本：${AppUpdateRepository.currentVersionLabel(context)}。\n正在从 GitHub 检测程序更新..."
         scope.launch {
             runCatching {
@@ -291,7 +298,11 @@ fun AStockSelectorApp() {
                 }
             }.onFailure { error ->
                 pendingAppUpdate = null
-                appUpdateStatus = "检测程序更新失败：${error.message ?: "未知错误"}"
+                appUpdateStatus = buildAppUpdateFailureStatus(
+                    currentLabel = AppUpdateRepository.currentVersionLabel(context),
+                    title = "检测程序更新失败",
+                    error = error,
+                )
             }
             isCheckingAppUpdate = false
         }
@@ -304,12 +315,14 @@ fun AStockSelectorApp() {
         }
         if (isCheckingAppUpdate) return
         isCheckingAppUpdate = true
+        appUpdateDownloadProgress = null
         val currentLabel = AppUpdateRepository.currentVersionLabel(context)
         appUpdateStatus = "当前版本：$currentLabel。\n准备下载新版 ${latest.versionName}..."
         scope.launch {
             runCatching {
                 AppUpdateRepository.downloadAndVerify(context, latest) { progress ->
                     withContext(Dispatchers.Main) {
+                        appUpdateDownloadProgress = progress
                         appUpdateStatus = buildAppUpdateDownloadStatus(
                             currentLabel = currentLabel,
                             latest = latest,
@@ -319,12 +332,17 @@ fun AStockSelectorApp() {
                 }
             }.onSuccess { apk ->
                 pendingAppUpdate = null
+                appUpdateDownloadProgress = null
                 appUpdateStatus =
                     "当前版本：$currentLabel。\n新版 ${latest.versionName} 已通过 SHA256 和大小校验，正在打开安装器。"
                 context.startActivity(AppUpdateRepository.installIntent(context, apk))
             }.onFailure { error ->
-                appUpdateStatus =
-                    "当前版本：$currentLabel。\n新版 ${latest.versionName} 下载或校验失败：${error.message ?: "未知错误"}\n可再次点击“下载更新”重试。"
+                appUpdateDownloadProgress = null
+                appUpdateStatus = buildAppUpdateFailureStatus(
+                    currentLabel = currentLabel,
+                    title = "新版 ${latest.versionName} 下载或校验失败",
+                    error = error,
+                )
             }
             isCheckingAppUpdate = false
         }
@@ -400,6 +418,7 @@ fun AStockSelectorApp() {
                     isLoading = isLoading,
                     onSmartUpdateData = ::smartUpdateData,
                     appUpdateStatus = appUpdateStatus,
+                    appUpdateDownloadProgress = appUpdateDownloadProgress,
                     appUpdateButtonText = appUpdateButtonText,
                     isCheckingAppUpdate = isCheckingAppUpdate,
                     onAppUpdateAction = {
@@ -517,9 +536,27 @@ private fun buildAppUpdateDownloadStatus(
     val totalMb = progress.totalBytes.toMegabytesText()
     val downloadedMb = progress.bytesDownloaded.toMegabytesText()
     val percentText = progress.percent?.let { "$it%" } ?: "计算中"
+    val progressMessage = progress.message.ifBlank { "下载完成后会自动校验安装包。" }
     return "当前版本：$currentLabel。\n" +
         "正在下载新版 ${latest.versionName}：$percentText（$downloadedMb / $totalMb）。\n" +
-        "第 ${progress.attempt}/${progress.maxAttempts} 次尝试，下载完成后会自动校验安装包。"
+        "第 ${progress.attempt}/${progress.maxAttempts} 次尝试，$progressMessage"
+}
+
+private fun buildAppUpdateFailureStatus(
+    currentLabel: String,
+    title: String,
+    error: Throwable,
+): String {
+    val reason = error.message?.takeIf { it.isNotBlank() } ?: "未知错误"
+    val suggestion = when {
+        reason.contains("HTTP", ignoreCase = true) -> "请检查网络是否能访问 GitHub raw 链接，稍后可再次重试。"
+        reason.contains("SHA256", ignoreCase = true) -> "安装包校验未通过，已停止安装，避免安装损坏文件。"
+        reason.contains("大小校验", ignoreCase = true) -> "下载文件大小不一致，可能是网络中断或缓存未同步。"
+        reason.contains("timeout", ignoreCase = true) || reason.contains("timed out", ignoreCase = true) ->
+            "网络连接超时，已清理未完成安装包，可再次点击下载更新。"
+        else -> "已清理未完成安装包，可再次点击下载更新。"
+    }
+    return "当前版本：$currentLabel。\n$title：$reason\n$suggestion"
 }
 
 private fun Long.toMegabytesText(): String =
@@ -866,6 +903,7 @@ private fun SettingsPage(
     isLoading: Boolean,
     onSmartUpdateData: () -> Unit,
     appUpdateStatus: String,
+    appUpdateDownloadProgress: AppUpdateDownloadProgress?,
     appUpdateButtonText: String,
     isCheckingAppUpdate: Boolean,
     onAppUpdateAction: () -> Unit,
@@ -1038,6 +1076,13 @@ private fun SettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                 )
+                appUpdateDownloadProgress?.let { progress ->
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { (progress.percent ?: 0) / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "点击后先判断缓存是否为收盘最新数据；已最新且无失败则复用结果，未最新则只更新缺目标交易日、失败或新增股票。",
