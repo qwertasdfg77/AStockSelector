@@ -6,6 +6,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: release-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   actions: write
   contents: write
@@ -29,6 +33,12 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+
+      - name: Check CI scripts and workflows
+        run: |
+          python -m py_compile scripts/*.py
+          python -m pip install pyyaml
+          python scripts/check-ci-config.py
 
       - name: Check release metadata consistency
         run: python scripts/check-release-consistency.py
