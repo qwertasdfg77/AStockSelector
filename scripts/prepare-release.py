@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 DEFAULT_NOTES = [
-    "程序更新下载后校验 APK SHA256 和大小，校验通过后再安装。",
-    "更新服务优先发布正式签名 release APK，并继续保留自动发布链路。",
-    "补充发布脚本、Dependabot、CodeQL 和单元测试。",
+    "Release 流程只发布正式签名 release APK，不再上传 debug APK。",
+    "发布后自动校验 latest.json、APK 大小和 SHA256。",
+    "App 内更新流程显示下载进度、重试原因，并清理未完成安装包。",
 ]
 
 

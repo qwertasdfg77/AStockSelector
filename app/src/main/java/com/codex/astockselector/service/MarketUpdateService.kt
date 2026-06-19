@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.app.NotificationCompat
 import com.codex.astockselector.MainActivity
 import com.codex.astockselector.data.CacheMarketRepository
 import com.codex.astockselector.data.MarketUpdateStore
@@ -139,24 +140,21 @@ class MarketUpdateService : Service() {
             openIntent,
             PendingIntent.FLAG_IMMUTABLE,
         )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
         val progress = if (ongoing) {
             parseNotificationProgress(text)
         } else {
             NotificationProgress(max = 0, current = 0, indeterminate = false)
         }
-        return builder
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("A股选股后台更新")
             .setContentText(text.take(90))
-            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
             .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setProgress(progress.max, progress.current, progress.indeterminate)
             .build()
     }
