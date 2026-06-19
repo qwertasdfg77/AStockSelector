@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.3.0
+
+- Release 流程改为只发布正式签名 release APK，不再上传 debug APK。
+- GitHub Actions artifact 和日志保留期改为 7 天，减少旧构建产物堆积。
+- Release 发布后自动读取远端 latest.json 并下载 APK，校验版本、大小和 SHA256。
+- App 内程序更新增加下载进度条、百分比、重试提示和更清楚的失败原因。
+- 下载失败或中断后自动清理未完成 APK，避免残留损坏安装包。
+
 ## 0.2.9
 
 - Retrofit 依赖升级到 2.12.0，保持网络请求栈在当前 Android 基线下可通过测试。

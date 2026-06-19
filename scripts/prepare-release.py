@@ -133,7 +133,7 @@ def write_release_doc(version_name: str, notes: list[str]) -> None:
 
 ## 当前 APK 类型
 
-当前优先发布正式签名 release APK。Release 中也会保留 debug APK，用于开源测试。
+当前只发布正式签名 release APK，不再在 Release 中上传 debug APK。
 
 签名说明见：[docs/signing-release.md](signing-release.md)
 
