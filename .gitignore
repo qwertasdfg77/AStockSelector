@@ -25,6 +25,10 @@ out/
 # Kotlin / Java
 *.class
 
+# Python helper scripts
+__pycache__/
+*.pyc
+
 # Local cache and generated app data
 market_cache.db
 *.db

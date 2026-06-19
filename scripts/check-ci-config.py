@@ -71,11 +71,19 @@ def check_release_only_uploads_release_apk() -> None:
             fail(f"release workflow is missing release-only guard: {token}")
 
 
+def require_document_text_scan() -> None:
+    for workflow_name in ["android-ci.yml", "release-apk.yml"]:
+        text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        if "python scripts/check-doc-text.py" not in text:
+            fail(f"{workflow_name} must run scripts/check-doc-text.py")
+
+
 def main() -> None:
     compile_python_scripts()
     workflows = parse_workflows()
     require_concurrency(workflows)
     check_release_only_uploads_release_apk()
+    require_document_text_scan()
     print("CI config check passed.")
 
 

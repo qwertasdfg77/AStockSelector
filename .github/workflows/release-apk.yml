@@ -38,6 +38,7 @@ jobs:
         run: |
           python -m py_compile scripts/*.py
           python -m pip install pyyaml
+          python scripts/check-doc-text.py
           python scripts/check-ci-config.py
 
       - name: Check release metadata consistency
