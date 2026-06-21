@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS metadata (
 -- kline_source
 -- cache_days
 -- last_expected_trade_date
+-- last_calendar_expected_trade_date
 -- stock_count
 -- daily_bar_count
 

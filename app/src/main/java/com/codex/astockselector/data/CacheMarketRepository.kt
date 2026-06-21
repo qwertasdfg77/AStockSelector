@@ -20,6 +20,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.time.DayOfWeek
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -41,6 +42,8 @@ data class MarketCacheInfo(
     val failedStockCount: Int = 0,
     val retryableFailedStockCount: Int = 0,
     val latestDateCoveragePct: Double = 0.0,
+    val lastExpectedTradeDate: String = "",
+    val lastCalendarExpectedTradeDate: String = "",
 )
 
 data class MarketCacheFreshness(
@@ -77,6 +80,7 @@ object CacheMarketRepository {
     private const val SQLITE_MAX_VARIABLES = 900
     const val MAX_DAILY_FAILURE_RETRIES = 2
     private const val MIN_EXPECTED_DATE_COVERAGE = 0.85
+    private const val RESOLVED_EXPECTED_DATE_CACHE_MINUTES = 30L
     private val dateFormatter = DateTimeFormatter.BASIC_ISO_DATE
     private val chinaZone = ZoneId.of("Asia/Shanghai")
 
@@ -85,11 +89,25 @@ object CacheMarketRepository {
         config: StrategyConfig,
         onProgress: suspend (String) -> Unit = {},
     ): List<StrategySignal> = withContext(Dispatchers.IO) {
-        val expectedDate = expectedLatestClosedTradeDate()
+        val calendarExpectedDate = expectedLatestClosedTradeDate()
         var info = cacheInfo(context)
-        val cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
+        var expectedDate = cachedExpectedTradeDate(info, calendarExpectedDate)
+        var cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
+        var candidates: List<MarketCacheStockCandidate>? = null
+
+        if (!cacheDateIsLatest) {
+            candidates = DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
+            expectedDate = resolveExpectedTradeDate(
+                currentInfo = info,
+                calendarExpectedDate = calendarExpectedDate,
+                candidates = candidates,
+                onProgress = onProgress,
+            )
+            cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
+        }
 
         if (cacheDateIsLatest && info.retryableFailedStockCount <= 0) {
+            recordExpectedTradeDate(context, expectedDate, calendarExpectedDate)
             emit(onProgress, "缓存已是收盘最新数据（${info.dateEnd}），直接筛选。")
             return@withContext loadSignals(context, config, onProgress)
         }
@@ -100,7 +118,16 @@ object CacheMarketRepository {
             val currentDate = if (info.exists) info.dateEnd.ifBlank { "无" } else "无缓存"
             emit(onProgress, "阶段1/5：缓存最新日期 $currentDate，目标收盘日期 $expectedDate，开始读取股票列表并规划缺口更新...")
         }
-        val updatedCodes = updateCache(context, config, info, expectedDate, forceRebuild = false, onProgress)
+        val updatedCodes = updateCache(
+            context = context,
+            config = config,
+            currentInfo = info,
+            expectedDate = expectedDate,
+            calendarExpectedDate = calendarExpectedDate,
+            forceRebuild = false,
+            onProgress = onProgress,
+            preloadedCandidates = candidates,
+        )
         info = cacheInfo(context)
         if (!info.exists || info.dateEnd < expectedDate) {
             val actualDate = info.dateEnd.ifBlank { "无" }
@@ -118,17 +145,26 @@ object CacheMarketRepository {
         config: StrategyConfig,
         onProgress: suspend (String) -> Unit = {},
     ): List<StrategySignal> = withContext(Dispatchers.IO) {
-        val expectedDate = expectedLatestClosedTradeDate()
+        val calendarExpectedDate = expectedLatestClosedTradeDate()
         emit(onProgress, "阶段1/5：开始重建缓存，将删除旧K线缓存，但保留App设置和已选战法。")
         val deletedCount = deleteCacheFiles(context)
         emit(onProgress, "阶段2/5：已删除旧缓存文件 $deletedCount 个，开始读取股票列表并规划重建。")
+        val candidates = DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
+        val expectedDate = resolveExpectedTradeDate(
+            currentInfo = MarketCacheInfo(),
+            calendarExpectedDate = calendarExpectedDate,
+            candidates = candidates,
+            onProgress = onProgress,
+        )
         val updatedCodes = updateCache(
             context = context,
             config = config,
             currentInfo = MarketCacheInfo(),
             expectedDate = expectedDate,
+            calendarExpectedDate = calendarExpectedDate,
             forceRebuild = true,
             onProgress = onProgress,
+            preloadedCandidates = candidates,
         )
         val info = cacheInfo(context)
         if (!info.exists || info.dateEnd < expectedDate) {
@@ -181,6 +217,8 @@ object CacheMarketRepository {
                     failedStockCount = failedStockCount,
                     retryableFailedStockCount = retryableFailedStockCount,
                     latestDateCoveragePct = latestCoverage * 100.0,
+                    lastExpectedTradeDate = metadata["last_expected_trade_date"].orEmpty(),
+                    lastCalendarExpectedTradeDate = metadata["last_calendar_expected_trade_date"].orEmpty(),
                 )
             }
         }.getOrElse {
@@ -193,7 +231,8 @@ object CacheMarketRepository {
 
     suspend fun cacheFreshness(context: Context): MarketCacheFreshness = withContext(Dispatchers.IO) {
         val info = cacheInfo(context)
-        val expectedDate = expectedLatestClosedTradeDate()
+        val calendarExpectedDate = expectedLatestClosedTradeDate()
+        val expectedDate = cachedExpectedTradeDate(info, calendarExpectedDate)
         MarketCacheFreshness(
             info = info,
             expectedDate = expectedDate,
@@ -400,13 +439,15 @@ object CacheMarketRepository {
         config: StrategyConfig,
         currentInfo: MarketCacheInfo,
         expectedDate: String,
+        calendarExpectedDate: String,
         forceRebuild: Boolean,
         onProgress: suspend (String) -> Unit,
+        preloadedCandidates: List<MarketCacheStockCandidate>? = null,
     ): Set<String> {
         val file = writableCacheFile(context, onProgress)
         ensureSchema(file)
 
-        val candidates = DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
+        val candidates = preloadedCandidates ?: DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
         if (candidates.isEmpty()) {
             error("没有读取到可更新的股票列表")
         }
@@ -427,7 +468,7 @@ object CacheMarketRepository {
                 try {
                     syncStockMaster(db, candidates, nowText)
                     deleteObsoleteFailures(db, candidates.map { it.stock.tsCode }.toSet())
-                    updateMetadata(db, nowText, expectedDate)
+                    updateMetadata(db, nowText, expectedDate, calendarExpectedDate)
                     db.setTransactionSuccessful()
                 } finally {
                     db.endTransaction()
@@ -493,7 +534,7 @@ object CacheMarketRepository {
                 )
                 deleteObsoleteFailures(db, candidates.map { it.stock.tsCode }.toSet())
                 cleanOldBars(db)
-                updateMetadata(db, nowText, expectedDate)
+                updateMetadata(db, nowText, expectedDate, calendarExpectedDate)
                 val coverage = db.dateCoverageRatio(expectedDate)
                 if (coverage < MIN_EXPECTED_DATE_COVERAGE) {
                     emit(
@@ -567,6 +608,78 @@ object CacheMarketRepository {
     private fun ensureSchema(file: File) {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             initSchema(db)
+        }
+    }
+
+    private fun cachedExpectedTradeDate(
+        info: MarketCacheInfo,
+        calendarExpectedDate: String,
+    ): String {
+        val cachedExpectedDate = info.lastExpectedTradeDate
+        return if (
+            cachedExpectedDate.isNotBlank() &&
+            cachedExpectedDate <= calendarExpectedDate &&
+            info.lastCalendarExpectedTradeDate == calendarExpectedDate &&
+            info.resolvedExpectedDateIsFresh()
+        ) {
+            cachedExpectedDate
+        } else {
+            calendarExpectedDate
+        }
+    }
+
+    private fun MarketCacheInfo.resolvedExpectedDateIsFresh(): Boolean {
+        val generatedAtTime = runCatching { LocalDateTime.parse(generatedAt) }.getOrNull() ?: return false
+        val now = LocalDateTime.now(chinaZone)
+        if (generatedAtTime.isAfter(now)) return false
+        return Duration.between(generatedAtTime, now).toMinutes() <= RESOLVED_EXPECTED_DATE_CACHE_MINUTES
+    }
+
+    private suspend fun resolveExpectedTradeDate(
+        currentInfo: MarketCacheInfo,
+        calendarExpectedDate: String,
+        candidates: List<MarketCacheStockCandidate>,
+        onProgress: suspend (String) -> Unit,
+    ): String {
+        val detectedDate = DirectMarketRepository.detectLatestTradeDate(
+            candidates = candidates,
+            maxExpectedDate = calendarExpectedDate,
+            onProgress = onProgress,
+        )
+        if (detectedDate.isNullOrBlank()) {
+            emit(onProgress, "阶段1/5：未能确认数据源最新交易日，继续按日历目标 $calendarExpectedDate 检查。")
+            return calendarExpectedDate
+        }
+        if (currentInfo.dateEnd.isNotBlank() && detectedDate < currentInfo.dateEnd) {
+            emit(onProgress, "阶段1/5：数据源样本日期 $detectedDate 早于本地缓存 ${currentInfo.dateEnd}，继续按日历目标 $calendarExpectedDate 检查。")
+            return calendarExpectedDate
+        }
+        if (detectedDate < calendarExpectedDate) {
+            emit(onProgress, "阶段1/5：日历目标 $calendarExpectedDate 不是数据源最新交易日，改按实际交易日 $detectedDate 判断。")
+        }
+        return detectedDate
+    }
+
+    private suspend fun recordExpectedTradeDate(
+        context: Context,
+        expectedDate: String,
+        calendarExpectedDate: String,
+    ) {
+        if (expectedDate.isBlank() || calendarExpectedDate.isBlank()) return
+        val file = cacheFile(context) ?: return
+        val writableFile = if (file.canOpenForWrite()) {
+            file
+        } else {
+            writableCacheFile(context) { }
+        }
+        SQLiteDatabase.openOrCreateDatabase(writableFile, null).use { db ->
+            initSchema(db)
+            updateMetadata(
+                db = db,
+                nowText = LocalDateTime.now(chinaZone).toString(),
+                expectedDate = expectedDate,
+                calendarExpectedDate = calendarExpectedDate,
+            )
         }
     }
 
@@ -931,7 +1044,12 @@ object CacheMarketRepository {
         }
     }
 
-    private fun updateMetadata(db: SQLiteDatabase, nowText: String, expectedDate: String) {
+    private fun updateMetadata(
+        db: SQLiteDatabase,
+        nowText: String,
+        expectedDate: String,
+        calendarExpectedDate: String,
+    ) {
         val values = mapOf(
             "schema_version" to "1",
             "generated_at" to nowText,
@@ -939,6 +1057,7 @@ object CacheMarketRepository {
             "kline_source" to "sina_primary_tencent_fallback_gap_incremental",
             "cache_days" to CACHE_KEEP_TRADE_DAYS.toString(),
             "last_expected_trade_date" to expectedDate,
+            "last_calendar_expected_trade_date" to calendarExpectedDate,
             "stock_count" to db.count("stocks").toString(),
             "daily_bar_count" to db.count("daily_bars").toString(),
         )

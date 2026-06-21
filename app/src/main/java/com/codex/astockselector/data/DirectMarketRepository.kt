@@ -85,6 +85,18 @@ object DirectMarketRepository {
     private const val CACHE_UPDATE_DELAY_MS = 120L
     private const val CACHE_EARLY_FAILURE_CHECK_COUNT = 100
     private const val RETRY_COUNT = 3
+    private const val LATEST_TRADE_DATE_PROBE_DAYS = 8
+    private const val LATEST_TRADE_DATE_PROBE_LIMIT = 8
+    private val latestTradeDateProbeSymbols = listOf(
+        "sh600000",
+        "sh600036",
+        "sh601318",
+        "sh600519",
+        "sz000001",
+        "sz000333",
+        "sz000651",
+        "sz300750",
+    )
 
     private val gson = Gson()
     private val requestGate = Mutex()
@@ -197,6 +209,42 @@ object DirectMarketRepository {
                     symbol = stock.symbol,
                     stock = stock.toCacheStockRecord(currentPrice = 0.0),
                 )
+            }
+        }
+    }
+
+    suspend fun detectLatestTradeDate(
+        candidates: List<MarketCacheStockCandidate>,
+        maxExpectedDate: String,
+        onProgress: suspend (String) -> Unit = {},
+    ): String? {
+        return withContext(Dispatchers.IO) {
+            if (candidates.isEmpty() || maxExpectedDate.isBlank()) return@withContext null
+
+            val bySymbol = candidates.associateBy { it.symbol }
+            val preferred = latestTradeDateProbeSymbols.mapNotNull { bySymbol[it] }
+            val fallback = candidates.filter { candidate -> candidate !in preferred }
+            val samples = (preferred + fallback).take(LATEST_TRADE_DATE_PROBE_LIMIT)
+            if (samples.isEmpty()) return@withContext null
+
+            emit(onProgress, "阶段1/5：正在用 ${samples.size} 只样本股票确认数据源最新交易日...")
+            val detectedDates = mutableListOf<String>()
+            samples.forEach { candidate ->
+                val latest = runCatching {
+                    loadCacheBarsWithFallback(candidate.toDirectStock(), LATEST_TRADE_DATE_PROBE_DAYS)
+                        .bars
+                        .asSequence()
+                        .map { it.tradeDate }
+                        .filter { it <= maxExpectedDate }
+                        .maxOrNull()
+                }.getOrNull()
+                if (!latest.isNullOrBlank()) {
+                    detectedDates += latest
+                }
+            }
+
+            detectedDates.maxOrNull()?.also { latest ->
+                emit(onProgress, "阶段1/5：数据源最新K线日期确认为 $latest。")
             }
         }
     }
