@@ -87,15 +87,15 @@ object DirectMarketRepository {
     private const val RETRY_COUNT = 3
     private const val LATEST_TRADE_DATE_PROBE_DAYS = 8
     private const val LATEST_TRADE_DATE_PROBE_LIMIT = 8
-    private val latestTradeDateProbeSymbols = listOf(
-        "sh600000",
-        "sh600036",
-        "sh601318",
-        "sh600519",
-        "sz000001",
-        "sz000333",
-        "sz000651",
-        "sz300750",
+    private val latestTradeDateProbeStocks = listOf(
+        DirectStock.probe("sh600000", "浦发银行", MarketSegment.MAIN),
+        DirectStock.probe("sh600036", "招商银行", MarketSegment.MAIN),
+        DirectStock.probe("sh601318", "中国平安", MarketSegment.MAIN),
+        DirectStock.probe("sh600519", "贵州茅台", MarketSegment.MAIN),
+        DirectStock.probe("sz000001", "平安银行", MarketSegment.MAIN),
+        DirectStock.probe("sz000333", "美的集团", MarketSegment.MAIN),
+        DirectStock.probe("sz000651", "格力电器", MarketSegment.MAIN),
+        DirectStock.probe("sz300750", "宁德时代", MarketSegment.CHINEXT),
     )
 
     private val gson = Gson()
@@ -214,24 +214,19 @@ object DirectMarketRepository {
     }
 
     suspend fun detectLatestTradeDate(
-        candidates: List<MarketCacheStockCandidate>,
         maxExpectedDate: String,
         onProgress: suspend (String) -> Unit = {},
     ): String? {
         return withContext(Dispatchers.IO) {
-            if (candidates.isEmpty() || maxExpectedDate.isBlank()) return@withContext null
-
-            val bySymbol = candidates.associateBy { it.symbol }
-            val preferred = latestTradeDateProbeSymbols.mapNotNull { bySymbol[it] }
-            val fallback = candidates.filter { candidate -> candidate !in preferred }
-            val samples = (preferred + fallback).take(LATEST_TRADE_DATE_PROBE_LIMIT)
+            if (maxExpectedDate.isBlank()) return@withContext null
+            val samples = latestTradeDateProbeStocks.take(LATEST_TRADE_DATE_PROBE_LIMIT)
             if (samples.isEmpty()) return@withContext null
 
             emit(onProgress, "阶段1/5：正在用 ${samples.size} 只样本股票确认数据源最新交易日...")
             val detectedDates = mutableListOf<String>()
-            samples.forEach { candidate ->
+            samples.forEach { stock ->
                 val latest = runCatching {
-                    loadCacheBarsWithFallback(candidate.toDirectStock(), LATEST_TRADE_DATE_PROBE_DAYS)
+                    loadCacheBarsWithFallback(stock, LATEST_TRADE_DATE_PROBE_DAYS)
                         .bars
                         .asSequence()
                         .map { it.tradeDate }
@@ -779,7 +774,24 @@ object DirectMarketRepository {
         val symbol: String,
         val currentAmount: Double,
         val profile: StockProfile,
-    )
+    ) {
+        companion object {
+            fun probe(symbol: String, name: String, market: MarketSegment): DirectStock {
+                val code = symbol.drop(2)
+                return DirectStock(
+                    symbol = symbol,
+                    currentAmount = 0.0,
+                    profile = StockProfile(
+                        tsCode = "$code.${if (symbol.startsWith("sh")) "SH" else "SZ"}",
+                        name = name,
+                        market = market,
+                        listDate = "",
+                        isSt = false,
+                    ),
+                )
+            }
+        }
+    }
 
     private data class KLineRow(
         val day: String,

@@ -93,14 +93,11 @@ object CacheMarketRepository {
         var info = cacheInfo(context)
         var expectedDate = cachedExpectedTradeDate(info, calendarExpectedDate)
         var cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
-        var candidates: List<MarketCacheStockCandidate>? = null
 
         if (!cacheDateIsLatest) {
-            candidates = DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
             expectedDate = resolveExpectedTradeDate(
                 currentInfo = info,
                 calendarExpectedDate = calendarExpectedDate,
-                candidates = candidates,
                 onProgress = onProgress,
             )
             cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
@@ -126,7 +123,6 @@ object CacheMarketRepository {
             calendarExpectedDate = calendarExpectedDate,
             forceRebuild = false,
             onProgress = onProgress,
-            preloadedCandidates = candidates,
         )
         info = cacheInfo(context)
         if (!info.exists || info.dateEnd < expectedDate) {
@@ -153,7 +149,6 @@ object CacheMarketRepository {
         val expectedDate = resolveExpectedTradeDate(
             currentInfo = MarketCacheInfo(),
             calendarExpectedDate = calendarExpectedDate,
-            candidates = candidates,
             onProgress = onProgress,
         )
         val updatedCodes = updateCache(
@@ -638,11 +633,9 @@ object CacheMarketRepository {
     private suspend fun resolveExpectedTradeDate(
         currentInfo: MarketCacheInfo,
         calendarExpectedDate: String,
-        candidates: List<MarketCacheStockCandidate>,
         onProgress: suspend (String) -> Unit,
     ): String {
         val detectedDate = DirectMarketRepository.detectLatestTradeDate(
-            candidates = candidates,
             maxExpectedDate = calendarExpectedDate,
             onProgress = onProgress,
         )
