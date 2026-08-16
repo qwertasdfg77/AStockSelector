@@ -7,9 +7,21 @@ import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StockProfile
 import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
+import java.util.Locale
 import kotlin.math.abs
 
 object StrategyEngine {
+    private const val THREE_YANG_MIN_RUN = 3
+    private const val THREE_YANG_MAX_RUN = 5
+    private const val THREE_YANG_BULL_BODY_RATIO = 0.30
+    private const val THREE_YANG_BEAR_BODY_RATIO = 0.20
+    private const val BALD_BULL_BODY_RATIO = 0.60
+    private const val BALD_BULL_UPPER_SHADOW_RATIO = 0.10
+    private const val BUILD_VOLUME_MULTIPLIER = 3.0
+    private const val BUILD_SHRINK_RATIO = 0.75
+    private const val LIFT_MAX_PULLBACK_PCT = 3.5
+    private const val LIFT_SHRINK_RATIO = 0.75
+
     fun evaluate(
         stock: StockProfile,
         bars: List<DailyBar>,
@@ -18,12 +30,15 @@ object StrategyEngine {
         if (stock.isSt || bars.size < 260) return emptyList()
 
         val sorted = bars.sortedBy { it.tradeDate }
+        if (sorted.last().amount < config.minAmount) return emptyList()
         val enriched = enrich(sorted)
         return listOfNotNull(
             evaluateFirstBoard(stock, enriched, config),
             evaluateNineYang(stock, enriched, config),
             evaluateGameKLine(stock, enriched, config),
             evaluateLowLevelStart(stock, sorted, enriched, config),
+            evaluateBuildThreeYang(stock, sorted, enriched),
+            evaluateLiftThreeYang(stock, sorted, enriched),
         ).sortedWith(compareByDescending<StrategySignal> { it.level.ordinal * -1 }.thenByDescending { it.score })
     }
 
@@ -376,6 +391,168 @@ object StrategyEngine {
         )
     }
 
+    private fun evaluateBuildThreeYang(
+        stock: StockProfile,
+        rawBars: List<DailyBar>,
+        bars: List<EnrichedBar>,
+    ): StrategySignal? {
+        val todayIndex = rawBars.lastIndex
+        val today = rawBars[todayIndex]
+        val ma20 = bars[todayIndex].ma20 ?: return null
+        val ma20FiveDaysAgo = bars[todayIndex - 5].ma20 ?: return null
+        val trendUp = today.close > ma20 && ma20 > ma20FiveDaysAgo
+        if (!trendUp) return null
+
+        var runStart = todayIndex
+        while (runStart >= 0 && rawBars[runStart].isQualifiedBullish()) {
+            runStart -= 1
+        }
+        runStart += 1
+
+        val runLength = todayIndex - runStart + 1
+        if (runLength !in THREE_YANG_MIN_RUN..THREE_YANG_MAX_RUN) return null
+
+        val runIndices = runStart..todayIndex
+        val closesRising = runIndices.all { index ->
+            index > 0 && rawBars[index].close > rawBars[index - 1].close
+        }
+        if (!closesRising) return null
+
+        val hasBaldBull = runIndices.any { index ->
+            val bar = rawBars[index]
+            bar.candleBodyRatio() >= BALD_BULL_BODY_RATIO &&
+                bar.upperShadowRatio() <= BALD_BULL_UPPER_SHADOW_RATIO
+        }
+        if (!hasBaldBull) return null
+
+        val volumeBursts = runIndices.mapNotNull { index ->
+            if (index < 5) return@mapNotNull null
+            val averagePrevious5 = rawBars.subList(index - 5, index).map { it.volume }.average()
+            if (averagePrevious5 > 0.0 && rawBars[index].volume >= averagePrevious5 * BUILD_VOLUME_MULTIPLIER) {
+                index to (rawBars[index].volume / averagePrevious5)
+            } else {
+                null
+            }
+        }
+        if (volumeBursts.isEmpty()) return null
+
+        val yesterday = rawBars[todayIndex - 1]
+        val shrinkVsYesterday = yesterday.volume > 0.0 && today.volume <= yesterday.volume * BUILD_SHRINK_RATIO
+        val shrinkVsBurst = volumeBursts.any { (index, _) ->
+            today.volume <= rawBars[index].volume * BUILD_SHRINK_RATIO
+        }
+        if (!shrinkVsYesterday || !shrinkVsBurst) return null
+
+        val maxVolumeRatio = volumeBursts.maxOf { it.second }
+        val volumeRatioYesterday = today.volume / yesterday.volume
+        val ma20RisePct = (ma20 / ma20FiveDaysAgo - 1.0) * 100.0
+
+        return StrategySignal(
+            tradeDate = today.tradeDate,
+            stock = stock,
+            strategy = "建仓三阳",
+            score = 100,
+            level = SignalLevel.NORMAL,
+            reasons = listOf(
+                "收盘站上MA20且MA20较5日前抬升",
+                "连续${runLength}根实体有效阳线且收盘逐日提高",
+                "连阳中出现光头阳和相对前5日均量3倍量",
+                "信号日成交量不超过昨日和放量日的75%",
+            ),
+            metrics = listOf(
+                "连续阳线" to "${runLength}根",
+                "最大量比" to "${format(maxVolumeRatio)}x",
+                "量比昨日" to "${format(volumeRatioYesterday)}x",
+                "MA20五日变化" to pct(ma20RisePct),
+            ),
+            buyTrigger = "次日不追高，等待回踩最近阳线实体或MA5不破后再确认。",
+            stopLoss = "跌破三阳起点最低价，或收盘跌破MA20。",
+            ruleChecks = listOf(
+                RuleCheck("收盘站上MA20且MA20抬升", trendUp),
+                RuleCheck("连续3至5根实体有效阳线", runLength in THREE_YANG_MIN_RUN..THREE_YANG_MAX_RUN),
+                RuleCheck("连阳收盘逐日提高", closesRising),
+                RuleCheck("至少一根光头阳", hasBaldBull),
+                RuleCheck("至少一天达到前5日均量3倍", volumeBursts.isNotEmpty()),
+                RuleCheck("信号日量不超过昨日和放量日75%", shrinkVsYesterday && shrinkVsBurst),
+            ),
+        )
+    }
+
+    private fun evaluateLiftThreeYang(
+        stock: StockProfile,
+        rawBars: List<DailyBar>,
+        bars: List<EnrichedBar>,
+    ): StrategySignal? {
+        val todayIndex = rawBars.lastIndex
+        val today = rawBars[todayIndex]
+        val ma10 = bars[todayIndex].ma10 ?: return null
+        val ma20 = bars[todayIndex].ma20 ?: return null
+        val ma20FiveDaysAgo = bars[todayIndex - 5].ma20 ?: return null
+        val trendUp = today.close > ma20 && ma20 > ma20FiveDaysAgo
+        if (!trendUp) return null
+
+        val firstYangIndex = todayIndex - 3
+        val secondYangIndex = todayIndex - 2
+        val thirdYangIndex = todayIndex - 1
+        val threeYangIndices = listOf(firstYangIndex, secondYangIndex, thirdYangIndex)
+        val threeQualifiedYang = threeYangIndices.all { rawBars[it].isQualifiedBullish() }
+        if (!threeQualifiedYang) return null
+
+        val closesRising = rawBars[firstYangIndex].close < rawBars[secondYangIndex].close &&
+            rawBars[secondYangIndex].close < rawBars[thirdYangIndex].close
+        val volumesRising = rawBars[firstYangIndex].volume < rawBars[secondYangIndex].volume &&
+            rawBars[secondYangIndex].volume < rawBars[thirdYangIndex].volume
+        if (!closesRising || !volumesRising) return null
+
+        val thirdYang = rawBars[thirdYangIndex]
+        val thirdDayNewHigh = thirdYang.close > rawBars
+            .subList(thirdYangIndex - 4, thirdYangIndex)
+            .maxOf { it.close }
+        if (!thirdDayNewHigh) return null
+
+        val signalBear = today.isQualifiedBearish()
+        val pullbackOk = today.pctChg >= -LIFT_MAX_PULLBACK_PCT && today.pctChg < 0.0
+        val shrinkOk = thirdYang.volume > 0.0 && today.volume <= thirdYang.volume * LIFT_SHRINK_RATIO
+        val supportOk = today.close > ma10 && today.close >= thirdYang.low
+        if (!signalBear || !pullbackOk || !shrinkOk || !supportOk) return null
+
+        val volumeRatioYesterday = today.volume / thirdYang.volume
+        val firstYangVolume = rawBars[firstYangIndex].volume
+        val volumeGrowth = if (firstYangVolume > 0.0) thirdYang.volume / firstYangVolume else 0.0
+        val ma10DistancePct = (today.close / ma10 - 1.0) * 100.0
+
+        return StrategySignal(
+            tradeDate = today.tradeDate,
+            stock = stock,
+            strategy = "拉升三阳",
+            score = 100,
+            level = SignalLevel.NORMAL,
+            reasons = listOf(
+                "收盘站上MA20且MA20较5日前抬升",
+                "前3日为实体有效阳线且收盘和成交量逐日提高",
+                "第三根阳线收盘创近5日新高",
+                "信号日缩量回调不超过3.5%且守住MA10和前阳最低价",
+            ),
+            metrics = listOf(
+                "回调幅度" to pct(today.pctChg),
+                "量比昨日" to "${format(volumeRatioYesterday)}x",
+                "三阳量增" to "${format(volumeGrowth)}x",
+                "距MA10" to pct(ma10DistancePct),
+            ),
+            buyTrigger = "次日重新转强并突破缩量阴线高点后再确认。",
+            stopLoss = "跌破缩量阴线最低价，或收盘跌破MA10。",
+            ruleChecks = listOf(
+                RuleCheck("收盘站上MA20且MA20抬升", trendUp),
+                RuleCheck("前3日均为实体有效阳线", threeQualifiedYang),
+                RuleCheck("三阳收盘和成交量逐日提高", closesRising && volumesRising),
+                RuleCheck("第三阳收盘创近5日新高", thirdDayNewHigh),
+                RuleCheck("信号日为回调不超过3.5%的实体阴线", signalBear && pullbackOk),
+                RuleCheck("信号日量不超过昨日75%", shrinkOk),
+                RuleCheck("收盘站上MA10且不破前阳最低价", supportOk),
+            ),
+        )
+    }
+
     private fun List<DailyBar>.movingAverage(index: Int, period: Int): Double? {
         if (index + 1 < period) return null
         var sum = 0.0
@@ -398,6 +575,22 @@ object StrategyEngine {
         return (this[index + 1] - this[index + 1 - period]) / period
     }
 
+    private fun DailyBar.candleBodyRatio(): Double {
+        val range = high - low
+        return if (range > 0.0) abs(close - open) / range else 0.0
+    }
+
+    private fun DailyBar.upperShadowRatio(): Double {
+        val range = high - low
+        return if (range > 0.0) (high - maxOf(open, close)) / range else 1.0
+    }
+
+    private fun DailyBar.isQualifiedBullish(): Boolean =
+        close > open && candleBodyRatio() >= THREE_YANG_BULL_BODY_RATIO
+
+    private fun DailyBar.isQualifiedBearish(): Boolean =
+        close < open && candleBodyRatio() >= THREE_YANG_BEAR_BODY_RATIO
+
     private fun pct(value: Double): String = "${format(value)}%"
 
     private fun amount(value: Double): String =
@@ -407,5 +600,5 @@ object StrategyEngine {
             else -> format(value)
         }
 
-    private fun format(value: Double): String = String.format("%.2f", value)
+    private fun format(value: Double): String = String.format(Locale.US, "%.2f", value)
 }

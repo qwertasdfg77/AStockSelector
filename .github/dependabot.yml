@@ -9,12 +9,13 @@ updates:
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 3
     allow:
-      - dependency-name: "com.squareup.retrofit2:*"
       - dependency-name: "com.squareup.okhttp3:*"
+      - dependency-name: "com.google.code.gson:gson"
     groups:
       network-stack:
         patterns:
           - "com.squareup.*"
+          - "com.google.code.gson:gson"
     commit-message:
       prefix: "deps(android)"
     labels:
@@ -30,8 +31,6 @@ updates:
       - dependency-name: "androidx.*"
       - dependency-name: "com.squareup.okhttp3:*"
         versions: [">=5.0.0"]
-      - dependency-name: "com.squareup.retrofit2:*"
-        versions: [">=3.0.0"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

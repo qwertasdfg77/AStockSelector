@@ -12,7 +12,8 @@ body:
         - 九阳蓄势
         - 博弈K
         - 低位启动
-        - 自定义筛选
+        - 建仓三阳
+        - 拉升三阳
         - 其他
     validations:
       required: true

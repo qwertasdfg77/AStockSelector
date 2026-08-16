@@ -43,6 +43,10 @@ def validate_version(version_name: str) -> None:
         fail("each versionName part must carry before 10; do not use versions like 0.1.10.")
 
 
+def version_tuple(version_name: str) -> tuple[int, int, int]:
+    return tuple(int(part) for part in version_name.split("."))
+
+
 def parse_current_release() -> tuple[str, int]:
     gradle = read_text("app/build.gradle.kts")
     version_name_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
@@ -176,6 +180,8 @@ def main() -> None:
     validate_version(args.version_name)
 
     current_version, current_code = parse_current_release()
+    if version_tuple(args.version_name) <= version_tuple(current_version):
+        fail(f"versionName must be greater than current versionName {current_version}.")
     if args.version_code <= current_code:
         fail(f"versionCode must be greater than current versionCode {current_code}.")
     if args.previous_version and args.previous_version != current_version:

@@ -57,4 +57,10 @@ object MarketUpdateStore {
             errorText = message,
         )
     }
+
+    fun consumeCompletion() {
+        if (_state.value.finished) {
+            _state.value = _state.value.copy(finished = false)
+        }
+    }
 }

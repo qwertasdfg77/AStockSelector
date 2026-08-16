@@ -20,19 +20,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
 
       - name: Check CI scripts and workflows
         run: |
@@ -43,6 +43,9 @@ jobs:
 
       - name: Check release metadata consistency
         run: python scripts/check-release-consistency.py
+
+      - name: Run release quality checks
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug
 
       - name: Check signing secrets
         env:
@@ -81,10 +84,17 @@ jobs:
 
       - name: Verify signed release APK
         if: env.SIGNING_ENABLED == 'true'
+        env:
+          EXPECTED_SIGNER_SHA256: c413f2a5af923efe37e6f59729366f88400b20797b64c04676635900e608a383
         shell: bash
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk > release-signing-report.txt
+          ACTUAL_SIGNER_SHA256="$(grep -i 'certificate SHA-256 digest:' release-signing-report.txt | head -n 1 | awk -F ': ' '{print tolower($2)}' | tr -d '[:space:]')"
+          if [ "$ACTUAL_SIGNER_SHA256" != "$EXPECTED_SIGNER_SHA256" ]; then
+            echo "Unexpected signing certificate SHA256: $ACTUAL_SIGNER_SHA256"
+            exit 1
+          fi
 
       - name: Collect APK files
         shell: bash
@@ -125,7 +135,7 @@ jobs:
           sha256sum "$RELEASE_FILE" > SHA256SUMS.txt
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: astockselector-apk-${{ github.ref_name }}
           retention-days: 7
@@ -137,7 +147,7 @@ jobs:
 
       - name: Upload APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           body_path: release-files/RELEASE_NOTES.md
           files: |
@@ -177,6 +187,7 @@ jobs:
           RELEASE_NOTES="AStockSelector ${VERSION_NAME}：请查看 GitHub Release 页面获取完整中文说明。"
 
           git clone "https://x-access-token:${ASTOCK_UPDATES_TOKEN}@github.com/qwertasdfg77/astock-selector-updates.git" update-server
+          cp update-server/latest.json previous-latest.json
           cp "$UPDATE_APK" "update-server/$UPDATE_FILE"
           python - <<PY
           import json
@@ -200,8 +211,10 @@ jobs:
             --apk "$UPDATE_APK" \
             --latest-json "update-server/latest.json" \
             --tag "$GITHUB_REF_NAME" \
+            --previous-latest-json "previous-latest.json" \
             --require-signed \
-            --signing-report "release-files/release-signing-report.txt"
+            --signing-report "release-files/release-signing-report.txt" \
+            --expected-signer-sha256 "c413f2a5af923efe37e6f59729366f88400b20797b64c04676635900e608a383"
 
           cd update-server
           git config user.name "github-actions[bot]"

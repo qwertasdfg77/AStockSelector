@@ -39,17 +39,24 @@ class MarketUpdateService : Service() {
         createNotificationChannel()
         startAsForeground("阶段1/5：正在准备读取A股数据...")
 
+        if (intent == null) {
+            updateNotification("后台任务状态已失效，请回到App重新启动更新")
+            stopForegroundCompat()
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
         if (runningJob?.isActive == true) {
             MarketUpdateStore.progress("后台读取已在运行中，请等待当前任务完成。")
             updateNotification("后台读取已在运行中")
-            return START_STICKY
+            return START_NOT_STICKY
         }
 
         val config = StrategyConfig(
-            nearMaPct = intent?.getDoubleExtra(EXTRA_NEAR_MA_PCT, 0.05) ?: 0.05,
-            minAmount = intent?.getDoubleExtra(EXTRA_MIN_AMOUNT, 50_000_000.0) ?: 50_000_000.0,
+            nearMaPct = intent.getDoubleExtra(EXTRA_NEAR_MA_PCT, 0.05),
+            minAmount = intent.getDoubleExtra(EXTRA_MIN_AMOUNT, 50_000_000.0),
         )
-        val rebuildCache = intent?.getBooleanExtra(EXTRA_REBUILD_CACHE, false) ?: false
+        val rebuildCache = intent.getBooleanExtra(EXTRA_REBUILD_CACHE, false)
         val dataSource = if (rebuildCache) "重建缓存" else DATA_SOURCE
 
         acquireWakeLock()
@@ -96,7 +103,7 @@ class MarketUpdateService : Service() {
             }
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -172,7 +179,6 @@ class MarketUpdateService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "A股选股后台读取",
@@ -204,12 +210,7 @@ class MarketUpdateService : Service() {
     }
 
     private fun stopForegroundCompat() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     companion object {

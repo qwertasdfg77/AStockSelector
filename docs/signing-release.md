@@ -2,6 +2,12 @@
 
 本仓库不会提交正式签名用的 keystore。keystore 是发布密钥，泄露后别人可以伪造同包名更新包，必须只保存在维护者自己手里或 GitHub Secrets 中。
 
+当前正式发布证书 SHA256：
+
+```text
+c413f2a5af923efe37e6f59729366f88400b20797b64c04676635900e608a383
+```
+
 ## 生成 keystore
 
 在本机执行：
@@ -11,7 +17,7 @@ keytool -genkeypair -v `
   -keystore astockselector-release.jks `
   -alias astockselector `
   -keyalg RSA `
-  -keysize 2048 `
+  -keysize 4096 `
   -validity 10000
 ```
 
@@ -27,11 +33,11 @@ keytool -genkeypair -v `
 设置环境变量后执行：
 
 ```powershell
-$env:ANDROID_KEYSTORE_FILE="D:\keys\astockselector-release.jks"
+$env:ANDROID_KEYSTORE_FILE="E:\keys\astockselector-release.jks"
 $env:ANDROID_KEYSTORE_PASSWORD="你的keystore密码"
 $env:ANDROID_KEY_ALIAS="astockselector"
 $env:ANDROID_KEY_PASSWORD="你的key密码"
-gradle --no-daemon :app:assembleRelease
+.\gradlew.bat --no-daemon :app:assembleRelease
 ```
 
 生成文件通常位于：
@@ -47,7 +53,7 @@ app/build/outputs/apk/release/
 把 keystore 转为 Base64：
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\keys\astockselector-release.jks")) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("E:\keys\astockselector-release.jks")) | Set-Clipboard
 ```
 
 在 GitHub 仓库中进入：
@@ -65,11 +71,11 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 
 之后推送 `v*` tag 时，`.github/workflows/release-apk.yml` 会自动：
 
-1. 构建 debug APK。
+1. 运行单元测试和 Android Lint。
 2. 检查签名 secrets 是否完整；标签发布缺少签名会直接失败。
 3. 构建正式签名 release APK。
-4. 校验 release APK 签名并生成签名报告。
-5. 校验 tag、`versionName`、`latest.json`、APK SHA256、APK 大小和签名报告。
+4. 校验 release APK 签名、固定证书 SHA256，并生成签名报告。
+5. 校验 tag、`versionName`、单调递增的 `versionCode`、`latest.json`、APK SHA256 和 APK 大小。
 6. 把 APK、SHA256、构建信息和签名报告上传到对应 GitHub Release。
 7. 自动更新 `qwertasdfg77/astock-selector-updates` 中的 APK 与 `latest.json`。
 
@@ -81,7 +87,6 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 
 自动发布后通常会看到这些文件：
 
-- `AStockSelector-v版本-debug.apk`：调试包，适合测试。
 - `AStockSelector-v版本-release.apk`：正式签名包；标签发布必须生成这个包。
 - `SHA256SUMS.txt`：APK 校验值。
 - `BUILD_INFO.txt`：构建时间、提交、签名状态和 Actions 链接。
@@ -92,8 +97,9 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 ## 发布 tag 示例
 
 ```powershell
-git tag v0.2.4
-git push origin v0.2.4
+$Version = "0.3.4"
+git tag "v$Version"
+git push origin "v$Version"
 ```
 
 注意：每次发布 APK 都应同步提升 `versionName` 和 `versionCode`。

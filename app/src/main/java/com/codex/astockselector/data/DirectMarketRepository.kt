@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -50,6 +51,7 @@ data class MarketCacheStockBars(
 data class MarketCacheStockCandidate(
     val symbol: String,
     val stock: MarketCacheStockRecord,
+    val source: String,
 )
 
 data class MarketCacheUpdateTarget(
@@ -79,6 +81,7 @@ object DirectMarketRepository {
     private const val TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
 
     private const val LIST_PAGE_SIZE = 100
+    private const val MIN_PLAUSIBLE_STOCK_LIST_SIZE = 3_000
     private const val KLINE_CONCURRENCY = 3
     private const val CACHE_UPDATE_CONCURRENCY = 8
     private const val PER_STOCK_DELAY_MS = 650L
@@ -114,7 +117,8 @@ object DirectMarketRepository {
         return withContext(Dispatchers.IO) {
             val startedAt = System.currentTimeMillis()
             emit(onProgress, "正在读取沪深A股列表...")
-            val stocks = loadStocks(config, onProgress)
+            val stocks = loadStocks(onProgress).stocks
+                .filter { it.currentAmount >= config.minAmount }
             if (stocks.isEmpty()) {
                 error("没有读取到股票列表，请检查手机网络后重试")
             }
@@ -187,7 +191,8 @@ object DirectMarketRepository {
         days: Int,
         onProgress: suspend (String) -> Unit = {},
     ): MarketCacheUpdateResult {
-        val candidates = loadCacheStockCandidates(config, onProgress)
+        val candidates = loadCacheStockCandidates(onProgress)
+            .filter { it.stock.currentAmount >= config.minAmount }
         return loadCacheUpdates(
             targets = candidates.map { MarketCacheUpdateTarget(it, days) },
             onProgress = onProgress,
@@ -195,12 +200,12 @@ object DirectMarketRepository {
     }
 
     suspend fun loadCacheStockCandidates(
-        config: StrategyConfig,
         onProgress: suspend (String) -> Unit = {},
     ): List<MarketCacheStockCandidate> {
         return withContext(Dispatchers.IO) {
             emit(onProgress, "阶段1/5：正在读取沪深A股股票列表，用于更新缓存...")
-            val stocks = loadStocks(config, onProgress)
+            val stockList = loadStocks(onProgress)
+            val stocks = stockList.stocks
             if (stocks.isEmpty()) {
                 error("没有读取到股票列表，请检查手机网络后重试")
             }
@@ -208,6 +213,7 @@ object DirectMarketRepository {
                 MarketCacheStockCandidate(
                     symbol = stock.symbol,
                     stock = stock.toCacheStockRecord(currentPrice = 0.0),
+                    source = stockList.source,
                 )
             }
         }
@@ -238,7 +244,7 @@ object DirectMarketRepository {
                 }
             }
 
-            detectedDates.maxOrNull()?.also { latest ->
+            selectDetectedTradeDate(detectedDates)?.also { latest ->
                 emit(onProgress, "阶段1/5：数据源最新K线日期确认为 $latest。")
             }
         }
@@ -265,6 +271,7 @@ object DirectMarketRepository {
             val abortEarly = AtomicBoolean(false)
             val lastError = AtomicReference("")
             val failures = mutableListOf<MarketCacheUpdateFailure>()
+            val attemptedIndexes = ConcurrentHashMap.newKeySet<Int>()
             val total = targets.size
             val nextIndex = AtomicInteger(0)
 
@@ -275,6 +282,7 @@ object DirectMarketRepository {
                         while (!abortEarly.get()) {
                             val index = nextIndex.getAndIncrement()
                             if (index >= total) break
+                            attemptedIndexes += index
                             val target = targets[index]
                             val stock = target.candidate.toDirectStock()
                             try {
@@ -331,9 +339,27 @@ object DirectMarketRepository {
                 }.awaitAll().flatten()
             }
 
+            val skippedTargets = targets.indices
+                .asSequence()
+                .filterNot { it in attemptedIndexes }
+                .map { targets[it] }
+                .toList()
+            if (skippedTargets.isNotEmpty()) {
+                val detail = lastError.get().ifBlank { "数据源连续失败" }
+                synchronized(failures) {
+                    failures += skippedTargets.map { target ->
+                        MarketCacheUpdateFailure(
+                            candidate = target.candidate,
+                            errorMessage = "数据源连续失败，已提前停止本次请求：$detail",
+                        )
+                    }
+                }
+                failed.addAndGet(skippedTargets.size)
+            }
+
             if (result.isEmpty()) {
                 val detail = lastError.get().ifBlank { "没有任何K线源返回有效数据" }
-                error("K线读取全部失败，已提前停止。新浪和备用腾讯都不可用。最近错误：$detail")
+                emit(onProgress, "阶段3/5：K线读取全部失败，先保存失败队列。最近错误：$detail")
             }
 
             emit(
@@ -348,19 +374,36 @@ object DirectMarketRepository {
     }
 
     private suspend fun loadStocks(
-        config: StrategyConfig,
         onProgress: suspend (String) -> Unit,
-    ): List<DirectStock> {
+    ): StockListLoadResult {
         return try {
-            loadSinaStocks(config, onProgress)
+            val stocks = loadSinaStocks(onProgress)
+            if (!isPlausibleStockListSize(stocks.size)) {
+                error("新浪股票列表数量异常：仅 ${stocks.size} 只")
+            }
+            StockListLoadResult(stocks, "sina")
         } catch (error: Exception) {
             emit(onProgress, "新浪列表读取失败：${error.message ?: "未知错误"}。正在尝试腾讯报价备用列表...")
-            loadTencentQuoteStocks(config, onProgress)
+            val stocks = loadTencentQuoteStocks(onProgress)
+            if (!isPlausibleStockListSize(stocks.size)) {
+                error("腾讯备用股票列表数量异常：仅 ${stocks.size} 只")
+            }
+            StockListLoadResult(stocks, "tencent")
         }
     }
 
+    internal fun isPlausibleStockListSize(size: Int): Boolean =
+        size >= MIN_PLAUSIBLE_STOCK_LIST_SIZE
+
+    internal fun selectDetectedTradeDate(dates: List<String>): String? =
+        dates
+            .filter { it.matches(Regex("""\d{8}""")) }
+            .groupingBy { it }
+            .eachCount()
+            .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            ?.key
+
     private suspend fun loadSinaStocks(
-        config: StrategyConfig,
         onProgress: suspend (String) -> Unit,
     ): List<DirectStock> {
         val total = fetchText(
@@ -398,8 +441,10 @@ object DirectMarketRepository {
 
                 if (!symbol.startsWith("sh") && !symbol.startsWith("sz")) return@mapNotNullTo null
                 if (code.length != 6) return@mapNotNullTo null
-                if (name.contains("ST", ignoreCase = true)) return@mapNotNullTo null
-                if (trade <= 0.0 || amount < config.minAmount) return@mapNotNullTo null
+                if (name.contains("ST", ignoreCase = true) || name.contains("退") || name.startsWith("PT")) {
+                    return@mapNotNullTo null
+                }
+                if (trade <= 0.0 || amount <= 0.0) return@mapNotNullTo null
 
                 DirectStock(
                     symbol = symbol,
@@ -424,7 +469,6 @@ object DirectMarketRepository {
     }
 
     private suspend fun loadTencentQuoteStocks(
-        config: StrategyConfig,
         onProgress: suspend (String) -> Unit,
     ): List<DirectStock> {
         val symbols = generatedTencentSymbols()
@@ -437,7 +481,7 @@ object DirectMarketRepository {
                 referer = "https://gu.qq.com/",
                 sourceName = "腾讯报价备用列表第 ${index + 1} 批",
             )
-            parseTencentQuoteText(text, config, result)
+            parseTencentQuoteText(text, result)
             if (index + 1 == chunks.size || (index + 1) % 10 == 0) {
                 emit(
                     onProgress,
@@ -525,15 +569,13 @@ object DirectMarketRepository {
     private suspend fun loadTencentBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
         val json = fetchText(
             url = TENCENT_KLINE_URL,
-            params = mapOf("param" to "${stock.symbol},day,,,$days,qfq"),
+            params = mapOf("param" to "${stock.symbol},day,,,$days,bfq"),
             referer = "https://gu.qq.com/",
             sourceName = "腾讯K线 ${stock.symbol}",
         )
         val root = gson.fromJson(json, JsonObject::class.java)
         val data = root.getAsJsonObject("data")?.getAsJsonObject(stock.symbol) ?: return emptyList()
-        val rows = data.getAsJsonArray("qfqday")
-            ?: data.getAsJsonArray("day")
-            ?: JsonArray()
+        val rows = data.getAsJsonArray("day") ?: JsonArray()
 
         return buildDailyBars(
             stock = stock,
@@ -555,8 +597,13 @@ object DirectMarketRepository {
 
     private fun buildDailyBars(stock: DirectStock, rows: List<KLineRow>, limit: Int): List<DailyBar> {
         var previousClose: Double? = null
-        return rows.mapNotNull { row ->
-            val tradeDate = row.day.replace("-", "")
+        val normalizedRows = rows
+            .map { row -> row.day.replace("-", "") to row }
+            .filter { (tradeDate) -> tradeDate.matches(Regex("""\d{8}""")) }
+            .sortedBy { (tradeDate) -> tradeDate }
+            .distinctBy { (tradeDate) -> tradeDate }
+
+        val bars = normalizedRows.mapNotNull { (tradeDate, row) ->
             val open = row.open?.toDoubleOrNull() ?: return@mapNotNull null
             val high = row.high?.toDoubleOrNull() ?: return@mapNotNull null
             val low = row.low?.toDoubleOrNull() ?: return@mapNotNull null
@@ -576,9 +623,12 @@ object DirectMarketRepository {
                 preClose = preClose,
                 pctChg = if (preClose > 0.0) (close - preClose) / preClose * 100.0 else 0.0,
                 volume = volume,
-                amount = stock.currentAmount,
+                amount = 0.0,
             )
         }.takeLast(limit)
+        return bars.mapIndexed { index, bar ->
+            if (index == bars.lastIndex) bar.copy(amount = stock.currentAmount) else bar
+        }
     }
 
     private suspend fun fetchText(
@@ -651,7 +701,6 @@ object DirectMarketRepository {
 
     private fun parseTencentQuoteText(
         text: String,
-        config: StrategyConfig,
         result: MutableList<DirectStock>,
     ) {
         val regex = Regex("""v_(sh|sz)(\d{6})="([^"]*)";""")
@@ -666,7 +715,7 @@ object DirectMarketRepository {
 
             if (name.isBlank()) return@forEach
             if (name.contains("ST", ignoreCase = true) || name.contains("退") || name.startsWith("PT")) return@forEach
-            if (trade <= 0.0 || volume <= 0.0 || amount < config.minAmount) return@forEach
+            if (trade <= 0.0 || volume <= 0.0 || amount <= 0.0) return@forEach
 
             result += DirectStock(
                 symbol = symbol,
@@ -792,6 +841,11 @@ object DirectMarketRepository {
             }
         }
     }
+
+    private data class StockListLoadResult(
+        val stocks: List<DirectStock>,
+        val source: String,
+    )
 
     private data class KLineRow(
         val day: String,

@@ -7,6 +7,13 @@ import java.io.File
 
 class AppUpdateRepositoryTest {
     @Test
+    fun currentVersionLabelContainsOnlyVersionName() {
+        val version = CurrentAppVersion(versionCode = 25L, versionName = "0.3.3")
+
+        assertEquals("0.3.3", version.label)
+    }
+
+    @Test
     fun parseUpdateInfoReadsApkIntegrityFields() {
         val update = AppUpdateRepository.parseUpdateInfo(
             """

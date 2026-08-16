@@ -19,7 +19,7 @@ data class CurrentAppVersion(
     val versionCode: Long,
     val versionName: String,
 ) {
-    val label: String = "$versionName（$versionCode）"
+    val label: String = versionName
 }
 
 data class AppUpdateInfo(

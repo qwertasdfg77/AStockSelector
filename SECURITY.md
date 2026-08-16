@@ -26,3 +26,10 @@ App 使用的主要权限：
 - `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC`：保持更新任务运行。
 - `WAKE_LOCK`：降低后台更新被中断的概率。
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`：提示用户允许后台读取。
+
+## 构建与发布
+
+- Gradle Wrapper 固定下载 SHA256，并启用发行地址校验。
+- GitHub Actions 固定到完整提交 SHA。
+- Release APK 必须使用正式密钥签名，证书 SHA256 必须匹配已发布证书。
+- 发布前校验 tag、版本、APK 大小、APK SHA256 和更新元数据。

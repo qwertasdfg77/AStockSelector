@@ -26,6 +26,7 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 
@@ -44,6 +45,8 @@ data class MarketCacheInfo(
     val latestDateCoveragePct: Double = 0.0,
     val lastExpectedTradeDate: String = "",
     val lastCalendarExpectedTradeDate: String = "",
+    val expectedTradeDateResolvedAt: String = "",
+    val priceMode: String = "",
 )
 
 data class MarketCacheFreshness(
@@ -55,6 +58,13 @@ data class MarketCacheFreshness(
 private data class CandidateBars(
     val stock: StockProfile,
     val bars: List<DailyBar>,
+)
+
+private data class SignalEvaluationWrite(
+    val tsCode: String,
+    val tradeDate: String,
+    val signals: List<StrategySignal>,
+    val evaluatedAt: String,
 )
 
 private data class CachedStockState(
@@ -77,10 +87,13 @@ object CacheMarketRepository {
     private const val SIGNAL_LOOKBACK_TRADE_DAYS = 270
     private const val INCREMENTAL_UPDATE_DAYS = 40
     private const val EVALUATION_BATCH_SIZE = 64
+    private const val EVALUATION_QUERY_BATCH_SIZE = 128
     private const val SQLITE_MAX_VARIABLES = 900
     const val MAX_DAILY_FAILURE_RETRIES = 2
     private const val MIN_EXPECTED_DATE_COVERAGE = 0.85
     private const val RESOLVED_EXPECTED_DATE_CACHE_MINUTES = 30L
+    private const val CACHE_SCHEMA_VERSION = "2"
+    internal const val CACHE_PRICE_MODE = "bfq_v1"
     private val dateFormatter = DateTimeFormatter.BASIC_ISO_DATE
     private val chinaZone = ZoneId.of("Asia/Shanghai")
 
@@ -90,9 +103,20 @@ object CacheMarketRepository {
         onProgress: suspend (String) -> Unit = {},
     ): List<StrategySignal> = withContext(Dispatchers.IO) {
         val calendarExpectedDate = expectedLatestClosedTradeDate()
-        var info = cacheInfo(context)
+        var info = cacheInfo(context, config.minAmount)
+        if (info.exists && info.dateEnd > calendarExpectedDate) {
+            error(
+                "缓存包含尚未收盘或超出目标范围的日期 ${info.dateEnd}，当前最近已收盘日期为 $calendarExpectedDate。" +
+                    "请在收盘数据稳定后使用“重建缓存”，避免用盘中日K筛选。",
+            )
+        }
+        if (!isCachePriceModeCompatible(info.dailyBarCount, info.priceMode)) {
+            emit(onProgress, "检测到旧缓存使用不同K线价格口径，将自动重建一次未复权缓存。")
+            return@withContext rebuildCacheAndLoadSignals(context, config, onProgress)
+        }
         var expectedDate = cachedExpectedTradeDate(info, calendarExpectedDate)
-        var cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
+        var cacheDateIsLatest = info.exists && info.dateEnd == expectedDate
+        var expectedDateResolvedAt: String? = null
 
         if (!cacheDateIsLatest) {
             expectedDate = resolveExpectedTradeDate(
@@ -100,13 +124,23 @@ object CacheMarketRepository {
                 calendarExpectedDate = calendarExpectedDate,
                 onProgress = onProgress,
             )
-            cacheDateIsLatest = info.exists && info.dateEnd >= expectedDate
+            expectedDateResolvedAt = LocalDateTime.now(chinaZone).toString()
+            cacheDateIsLatest = info.exists && info.dateEnd == expectedDate
         }
 
-        if (cacheDateIsLatest && info.retryableFailedStockCount <= 0) {
-            recordExpectedTradeDate(context, expectedDate, calendarExpectedDate)
+        val eligibleCacheHasGaps = cacheDateIsLatest &&
+            hasEligibleCacheGaps(context, config.minAmount, expectedDate)
+
+        if (cacheDateIsLatest && info.retryableFailedStockCount <= 0 && !eligibleCacheHasGaps) {
+            if (expectedDateResolvedAt != null) {
+                recordExpectedTradeDate(context, expectedDate, calendarExpectedDate, expectedDateResolvedAt)
+            }
             emit(onProgress, "缓存已是收盘最新数据（${info.dateEnd}），直接筛选。")
             return@withContext loadSignals(context, config, onProgress)
+        }
+
+        if (eligibleCacheHasGaps) {
+            emit(onProgress, "最低成交额范围已扩大或存在缺口，将只补齐当前门槛内缺少最新K线的股票。")
         }
 
         if (cacheDateIsLatest) {
@@ -118,16 +152,16 @@ object CacheMarketRepository {
         val updatedCodes = updateCache(
             context = context,
             config = config,
-            currentInfo = info,
             expectedDate = expectedDate,
             calendarExpectedDate = calendarExpectedDate,
+            expectedDateResolvedAt = expectedDateResolvedAt,
             forceRebuild = false,
             onProgress = onProgress,
         )
-        info = cacheInfo(context)
-        if (!info.exists || info.dateEnd < expectedDate) {
+        info = cacheInfo(context, config.minAmount)
+        if (!info.exists || info.dateEnd != expectedDate) {
             val actualDate = info.dateEnd.ifBlank { "无" }
-            error("缓存更新后仍未达到目标收盘日期：目标 $expectedDate，当前 $actualDate。请稍后重试或检查数据源。")
+            error("缓存更新后未精确达到目标收盘日期：目标 $expectedDate，当前 $actualDate。请稍后重试或检查数据源。")
         }
         if (info.retryableFailedStockCount > 0) {
             emit(onProgress, "仍有 ${info.retryableFailedStockCount} 只股票未补齐，已记录失败队列，稍后可再次重试。")
@@ -145,32 +179,36 @@ object CacheMarketRepository {
         emit(onProgress, "阶段1/5：开始重建缓存，将删除旧K线缓存，但保留App设置和已选战法。")
         val deletedCount = deleteCacheFiles(context)
         emit(onProgress, "阶段2/5：已删除旧缓存文件 $deletedCount 个，开始读取股票列表并规划重建。")
-        val candidates = DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
+        val candidates = DirectMarketRepository.loadCacheStockCandidates(onProgress)
         val expectedDate = resolveExpectedTradeDate(
             currentInfo = MarketCacheInfo(),
             calendarExpectedDate = calendarExpectedDate,
             onProgress = onProgress,
         )
+        val expectedDateResolvedAt = LocalDateTime.now(chinaZone).toString()
         val updatedCodes = updateCache(
             context = context,
             config = config,
-            currentInfo = MarketCacheInfo(),
             expectedDate = expectedDate,
             calendarExpectedDate = calendarExpectedDate,
+            expectedDateResolvedAt = expectedDateResolvedAt,
             forceRebuild = true,
             onProgress = onProgress,
             preloadedCandidates = candidates,
         )
-        val info = cacheInfo(context)
-        if (!info.exists || info.dateEnd < expectedDate) {
+        val info = cacheInfo(context, config.minAmount)
+        if (!info.exists || info.dateEnd != expectedDate) {
             val actualDate = info.dateEnd.ifBlank { "无" }
-            error("重建缓存后仍未达到目标收盘日期：目标 $expectedDate，当前 $actualDate。请稍后重试或检查数据源。")
+            error("重建缓存后未精确达到目标收盘日期：目标 $expectedDate，当前 $actualDate。请稍后重试或检查数据源。")
         }
         emit(onProgress, "阶段5/5：缓存重建完成：${info.stockCount} 只股票，${info.dailyBarCount} 行K线，开始增量筛选...")
         loadSignals(context, config, onProgress, updatedCodes = updatedCodes)
     }
 
-    suspend fun cacheInfo(context: Context): MarketCacheInfo = withContext(Dispatchers.IO) {
+    suspend fun cacheInfo(
+        context: Context,
+        minAmount: Double = StrategyConfig().minAmount,
+    ): MarketCacheInfo = withContext(Dispatchers.IO) {
         val file = cacheFile(context) ?: return@withContext MarketCacheInfo()
         runCatching {
             SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
@@ -193,7 +231,7 @@ object CacheMarketRepository {
                     0
                 }
                 val latestCoverage = if (dateRange.second.isNotBlank()) {
-                    db.dateCoverageRatio(dateRange.second)
+                    db.dateCoverageRatio(dateRange.second, minAmount)
                 } else {
                     0.0
                 }
@@ -202,9 +240,9 @@ object CacheMarketRepository {
                     path = file.absolutePath,
                     sizeMb = file.length().toDouble() / 1024.0 / 1024.0,
                     generatedAt = metadata["generated_at"].orEmpty(),
-                    stockCount = metadata["stock_count"]?.toIntOrNull()
+                    stockCount = metadata["stock_count"]?.toIntOrNull()?.takeIf { it > 0 }
                         ?: db.count("stocks"),
-                    dailyBarCount = metadata["daily_bar_count"]?.toIntOrNull()
+                    dailyBarCount = metadata["daily_bar_count"]?.toIntOrNull()?.takeIf { it > 0 }
                         ?: db.count("daily_bars"),
                     dateStart = dateRange.first,
                     dateEnd = dateRange.second,
@@ -214,6 +252,8 @@ object CacheMarketRepository {
                     latestDateCoveragePct = latestCoverage * 100.0,
                     lastExpectedTradeDate = metadata["last_expected_trade_date"].orEmpty(),
                     lastCalendarExpectedTradeDate = metadata["last_calendar_expected_trade_date"].orEmpty(),
+                    expectedTradeDateResolvedAt = metadata["expected_trade_date_resolved_at"].orEmpty(),
+                    priceMode = metadata["price_mode"].orEmpty(),
                 )
             }
         }.getOrElse {
@@ -224,14 +264,24 @@ object CacheMarketRepository {
         }
     }
 
-    suspend fun cacheFreshness(context: Context): MarketCacheFreshness = withContext(Dispatchers.IO) {
-        val info = cacheInfo(context)
+    suspend fun cacheFreshness(
+        context: Context,
+        minAmount: Double = StrategyConfig().minAmount,
+    ): MarketCacheFreshness = withContext(Dispatchers.IO) {
+        val info = cacheInfo(context, minAmount)
         val calendarExpectedDate = expectedLatestClosedTradeDate()
         val expectedDate = cachedExpectedTradeDate(info, calendarExpectedDate)
+        val hasRetryableGaps = info.exists &&
+            info.dateEnd == expectedDate &&
+            hasEligibleCacheGaps(context, minAmount, expectedDate)
         MarketCacheFreshness(
             info = info,
             expectedDate = expectedDate,
-            isLatest = info.exists && info.dateEnd >= expectedDate && info.retryableFailedStockCount <= 0,
+            isLatest = info.exists &&
+                isCachePriceModeCompatible(info.dailyBarCount, info.priceMode) &&
+                info.dateEnd == expectedDate &&
+                info.retryableFailedStockCount <= 0 &&
+                !hasRetryableGaps,
         )
     }
 
@@ -286,13 +336,15 @@ object CacheMarketRepository {
             val ruleKey = config.strategyRuleKey()
             val currentCodes = stocks.keys
 
-            cleanObsoleteSignalResults(db, cacheTradeDate, currentCodes)
+            cleanObsoleteSignalResults(db, ruleKey, cacheTradeDate, currentCodes)
             if (updatedCodes.isNotEmpty()) {
                 clearSignalResultsForCodes(db, updatedCodes)
                 emit(onProgress, "阶段5/5：已标记 ${updatedCodes.size} 只更新成功股票需要重新筛选。")
             }
 
-            val evaluableCodes = loadEvaluableCodes(db, cutoffTradeDate).filter { it in stocks }.toSet()
+            val evaluableCodes = loadEvaluableCodes(db, cacheTradeDate)
+                .filter { it in stocks }
+                .toSet()
             val evaluatedCodes = loadEvaluatedCodes(db, ruleKey, cacheTradeDate)
             val codesToEvaluate = (evaluableCodes - evaluatedCodes).sorted()
             val cachedSignals = loadStoredSignalResults(db, ruleKey, cacheTradeDate)
@@ -311,51 +363,55 @@ object CacheMarketRepository {
             val signals = mutableListOf<StrategySignal>()
             val bars = mutableListOf<DailyBar>()
             val pendingEvaluations = mutableListOf<CandidateBars>()
+            val pendingWrites = mutableListOf<SignalEvaluationWrite>()
             var currentTsCode = ""
             var completed = 0
+
+            fun flushEvaluationWrites() {
+                if (pendingWrites.isEmpty()) return
+                storeSignalEvaluations(db, ruleKey, pendingWrites)
+                pendingWrites.clear()
+            }
 
             suspend fun flushPendingEvaluations() {
                 if (pendingEvaluations.isEmpty()) return
                 val pending = pendingEvaluations.toList()
-                val evaluated = evaluateCandidateBatch(pending, config)
-                signals += evaluated
-                val nowText = LocalDateTime.now(chinaZone).toString()
-                pending.forEach { candidate ->
-                    val stockSignals = evaluated.filter { it.stock.tsCode == candidate.stock.tsCode }
-                    storeSignalEvaluation(
-                        db = db,
-                        ruleKey = ruleKey,
-                        tradeDate = cacheTradeDate,
-                        tsCode = candidate.stock.tsCode,
-                        signals = stockSignals,
-                        nowText = nowText,
-                    )
-                }
                 pendingEvaluations.clear()
+                pending.chunked(EVALUATION_BATCH_SIZE).forEach { batch ->
+                    val evaluated = evaluateCandidateBatch(batch, config)
+                    signals += evaluated
+                    val signalsByCode = evaluated.groupBy { it.stock.tsCode }
+                    val nowText = LocalDateTime.now(chinaZone).toString()
+                    batch.forEach { candidate ->
+                        pendingWrites += SignalEvaluationWrite(
+                            tsCode = candidate.stock.tsCode,
+                            tradeDate = candidate.bars.last().tradeDate,
+                            signals = signalsByCode[candidate.stock.tsCode].orEmpty(),
+                            evaluatedAt = nowText,
+                        )
+                    }
+                }
             }
 
-            suspend fun evaluateCurrent() {
+            fun evaluateCurrent() {
                 if (currentTsCode.isBlank() || bars.isEmpty()) return
                 val stock = stocks[currentTsCode]
                 if (stock != null && isCoarseCandidate(stock, bars, config)) {
                     pendingEvaluations += CandidateBars(stock, bars.toList())
-                    if (pendingEvaluations.size >= EVALUATION_BATCH_SIZE) {
-                        flushPendingEvaluations()
-                    }
                 } else if (stock != null) {
-                    storeSignalEvaluation(
-                        db = db,
-                        ruleKey = ruleKey,
-                        tradeDate = cacheTradeDate,
+                    pendingWrites += SignalEvaluationWrite(
                         tsCode = stock.tsCode,
+                        tradeDate = bars.last().tradeDate,
                         signals = emptyList(),
-                        nowText = LocalDateTime.now(chinaZone).toString(),
+                        evaluatedAt = LocalDateTime.now(chinaZone).toString(),
                     )
                 }
                 completed += 1
             }
 
-            codesToEvaluate.chunked(SQLITE_MAX_VARIABLES).forEach { codeChunk ->
+            codesToEvaluate.chunked(EVALUATION_QUERY_BATCH_SIZE).forEach { codeChunk ->
+                currentTsCode = ""
+                bars.clear()
                 val placeholders = codeChunk.joinToString(",") { "?" }
                 val args = arrayOf(cutoffTradeDate) + codeChunk.toTypedArray()
                 db.rawQuery(
@@ -384,15 +440,6 @@ object CacheMarketRepository {
                             currentTsCode = tsCode
                         } else if (tsCode != currentTsCode) {
                             evaluateCurrent()
-                            if (completed % 50 == 0) {
-                                flushPendingEvaluations()
-                                emit(
-                                    onProgress,
-                                    "阶段5/5：正在筛选 $completed/${codesToEvaluate.size}，本次新命中 ${signals.size} 条，剩余约 ${
-                                        estimateRemaining(completed, codesToEvaluate.size, startedAt)
-                                    }。",
-                                )
-                            }
                             bars.clear()
                             currentTsCode = tsCode
                         }
@@ -411,16 +458,29 @@ object CacheMarketRepository {
                         )
                     }
                 }
+                evaluateCurrent()
+                flushPendingEvaluations()
+                flushEvaluationWrites()
+                if (completed < codesToEvaluate.size) {
+                    emit(
+                        onProgress,
+                        "阶段5/5：正在筛选 $completed/${codesToEvaluate.size}，本次新命中 ${signals.size} 条，剩余约 ${
+                            estimateRemaining(completed, codesToEvaluate.size, startedAt)
+                        }。",
+                    )
+                }
             }
-            evaluateCurrent()
-            flushPendingEvaluations()
 
             val missingBarCodes = codesToEvaluate.toSet() - loadEvaluatedCodes(db, ruleKey, cacheTradeDate)
             if (missingBarCodes.isNotEmpty()) {
                 val nowText = LocalDateTime.now(chinaZone).toString()
-                missingBarCodes.forEach { tsCode ->
-                    storeSignalEvaluation(db, ruleKey, cacheTradeDate, tsCode, emptyList(), nowText)
-                }
+                storeSignalEvaluations(
+                    db = db,
+                    ruleKey = ruleKey,
+                    writes = missingBarCodes.map { tsCode ->
+                        SignalEvaluationWrite(tsCode, cacheTradeDate, emptyList(), nowText)
+                    },
+                )
             }
 
             val sorted = (cachedSignals + signals).sortSignals()
@@ -432,9 +492,9 @@ object CacheMarketRepository {
     private suspend fun updateCache(
         context: Context,
         config: StrategyConfig,
-        currentInfo: MarketCacheInfo,
         expectedDate: String,
         calendarExpectedDate: String,
+        expectedDateResolvedAt: String?,
         forceRebuild: Boolean,
         onProgress: suspend (String) -> Unit,
         preloadedCandidates: List<MarketCacheStockCandidate>? = null,
@@ -442,7 +502,7 @@ object CacheMarketRepository {
         val file = writableCacheFile(context, onProgress)
         ensureSchema(file)
 
-        val candidates = preloadedCandidates ?: DirectMarketRepository.loadCacheStockCandidates(config, onProgress)
+        val candidates = preloadedCandidates ?: DirectMarketRepository.loadCacheStockCandidates(onProgress)
         if (candidates.isEmpty()) {
             error("没有读取到可更新的股票列表")
         }
@@ -450,8 +510,8 @@ object CacheMarketRepository {
         val targets = buildUpdateTargets(
             file = file,
             candidates = candidates,
-            currentInfo = currentInfo,
             expectedDate = expectedDate,
+            minAmount = config.minAmount,
             forceRebuild = forceRebuild,
             onProgress = onProgress,
         )
@@ -463,7 +523,7 @@ object CacheMarketRepository {
                 try {
                     syncStockMaster(db, candidates, nowText)
                     deleteObsoleteFailures(db, candidates.map { it.stock.tsCode }.toSet())
-                    updateMetadata(db, nowText, expectedDate, calendarExpectedDate)
+                    updateMetadata(db, nowText, expectedDate, calendarExpectedDate, expectedDateResolvedAt)
                     db.setTransactionSuccessful()
                 } finally {
                     db.endTransaction()
@@ -477,10 +537,36 @@ object CacheMarketRepository {
             targets = targets,
             onProgress = onProgress,
         )
-        val allTargetsFailed = updateResult.updates.isEmpty() && updateResult.failures.isNotEmpty()
-        val successCodes = updateResult.updates.map { it.stock.tsCode }.toSet()
+        val targetsByCode = targets.associateBy { it.candidate.stock.tsCode }
+        val acceptedUpdates = updateResult.updates.filter { item ->
+            matchesExpectedTradeDate(item.bars.lastOrNull()?.tradeDate.orEmpty(), expectedDate)
+        }
+        val staleDateFailures = updateResult.updates
+            .filterNot { item ->
+                matchesExpectedTradeDate(item.bars.lastOrNull()?.tradeDate.orEmpty(), expectedDate)
+            }
+            .mapNotNull { item ->
+                targetsByCode[item.stock.tsCode]?.let { target ->
+                    MarketCacheUpdateFailure(
+                        candidate = target.candidate,
+                        errorMessage = item.bars.lastOrNull()?.tradeDate.orEmpty().let { actualDate ->
+                            when {
+                                actualDate.isBlank() -> "K线最新日期为空，目标日期为 $expectedDate"
+                                actualDate > expectedDate ->
+                                    "K线最新日期 $actualDate 超出目标收盘日 $expectedDate，疑似包含未收盘日K，已拒绝写入"
+                                else -> "K线最新日期 $actualDate，未达到目标 $expectedDate"
+                            }
+                        },
+                    )
+                }
+            }
+        val failures = (updateResult.failures + staleDateFailures)
+            .distinctBy { it.candidate.stock.tsCode }
+        val successCodes = acceptedUpdates.map { it.stock.tsCode }.toSet()
+        val allTargetsFailed = targets.isNotEmpty() && successCodes.isEmpty()
 
         emit(onProgress, "阶段4/5：正在保存K线到本地缓存数据库...")
+        var coverage = 0.0
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             initSchema(db)
             val nowText = LocalDateTime.now(chinaZone).toString()
@@ -496,8 +582,7 @@ object CacheMarketRepository {
                 """.trimIndent()
 
                 syncStockMaster(db, candidates, nowText)
-                updateResult.updates.forEachIndexed { index, item ->
-                    upsertStock(db, item.stock, nowText)
+                acceptedUpdates.forEach { item ->
                     item.bars.forEach { bar ->
                         db.execSQL(
                             barSql,
@@ -516,36 +601,37 @@ object CacheMarketRepository {
                             ),
                         )
                     }
-                    if ((index + 1) % 200 == 0) {
-                        emit(onProgress, "阶段4/5：正在保存缓存 ${index + 1}/${updateResult.updates.size} 只...")
-                    }
                 }
 
                 clearSuccessfulFailures(db, successCodes)
                 recordFailures(
                     db = db,
-                    failures = updateResult.failures.filter { it.candidate.stock.tsCode in failedTargetCodes },
+                    failures = failures.filter { it.candidate.stock.tsCode in failedTargetCodes },
                     nowText = nowText,
                 )
                 deleteObsoleteFailures(db, candidates.map { it.stock.tsCode }.toSet())
                 cleanOldBars(db)
-                updateMetadata(db, nowText, expectedDate, calendarExpectedDate)
-                val coverage = db.dateCoverageRatio(expectedDate)
-                if (coverage < MIN_EXPECTED_DATE_COVERAGE) {
-                    emit(
-                        onProgress,
-                        "阶段4/5：目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%，低于 ${String.format("%.0f", MIN_EXPECTED_DATE_COVERAGE * 100)}%，失败股票已保留到下次补读。",
-                    )
-                } else {
-                    emit(onProgress, "阶段4/5：目标交易日覆盖率 ${String.format("%.1f", coverage * 100)}%。")
-                }
+                updateMetadata(db, nowText, expectedDate, calendarExpectedDate, expectedDateResolvedAt)
+                coverage = db.dateCoverageRatio(expectedDate, config.minAmount)
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
             }
         }
+        if (coverage < MIN_EXPECTED_DATE_COVERAGE) {
+            emit(
+                onProgress,
+                "阶段4/5：目标交易日覆盖率 ${String.format(Locale.US, "%.1f", coverage * 100)}%，低于 ${String.format(Locale.US, "%.0f", MIN_EXPECTED_DATE_COVERAGE * 100)}%，失败股票已保留到下次补读。",
+            )
+        } else {
+            emit(onProgress, "阶段4/5：目标交易日覆盖率 ${String.format(Locale.US, "%.1f", coverage * 100)}%。")
+        }
         if (allTargetsFailed) {
-            error("本次目标股票K线全部读取失败，已记录失败队列。")
+            val detail = failures.firstOrNull()?.errorMessage.orEmpty()
+            error(
+                "本次目标股票K线全部读取失败，已记录失败队列。" +
+                    detail.takeIf { it.isNotBlank() }?.let { "最近原因：$it" }.orEmpty(),
+            )
         }
         return successCodes
     }
@@ -558,15 +644,54 @@ object CacheMarketRepository {
         return candidates.maxByOrNull { it.lastModified() }
     }
 
+    private fun hasEligibleCacheGaps(
+        context: Context,
+        minAmount: Double,
+        expectedDate: String,
+    ): Boolean {
+        if (minAmount <= 0.0 || expectedDate.isBlank()) return true
+        val file = cacheFile(context) ?: return true
+        return runCatching {
+            SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery(
+                    """
+                    SELECT 1
+                    FROM stocks AS s
+                    LEFT JOIN cache_update_failures AS failure ON failure.ts_code = s.ts_code
+                    WHERE s.current_amount >= ?
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM daily_bars AS bars
+                          WHERE bars.ts_code = s.ts_code AND bars.trade_date = ?
+                      )
+                      AND (
+                          failure.ts_code IS NULL
+                          OR failure.retry_date != ?
+                          OR failure.retry_count < ?
+                      )
+                    LIMIT 1
+                    """.trimIndent(),
+                    arrayOf(
+                        minAmount.toString(),
+                        expectedDate,
+                        todayRetryDate(),
+                        MAX_DAILY_FAILURE_RETRIES.toString(),
+                    ),
+                ).use { cursor -> cursor.moveToFirst() }
+            }
+        }.getOrDefault(true)
+    }
+
     private fun deleteCacheFiles(context: Context): Int {
         val candidates = listOfNotNull(
             File(context.filesDir, DB_NAME),
             context.getExternalFilesDir(null)?.let { File(it, DB_NAME) },
         ).distinctBy { it.absolutePath }
 
-        return candidates.count { file ->
-            file.exists() && runCatching { file.delete() }.getOrDefault(false)
-        }
+        return candidates
+            .flatMap(::cacheDatabaseFiles)
+            .distinctBy { it.absolutePath }
+            .count { file -> file.exists() && runCatching { file.delete() }.getOrDefault(false) }
     }
 
     private suspend fun writableCacheFile(
@@ -623,11 +748,30 @@ object CacheMarketRepository {
         }
     }
 
+    internal fun isCachePriceModeCompatible(dailyBarCount: Int, priceMode: String): Boolean =
+        dailyBarCount <= 0 || priceMode == CACHE_PRICE_MODE
+
+    internal fun matchesExpectedTradeDate(actualDate: String, expectedDate: String): Boolean =
+        actualDate.isNotBlank() && expectedDate.isNotBlank() && actualDate == expectedDate
+
+    internal fun isEligibleForKlineUpdate(currentAmount: Double, minAmount: Double): Boolean =
+        currentAmount > 0.0 && currentAmount >= minAmount
+
+    internal fun shouldUpdateCacheCandidate(
+        forceRebuild: Boolean,
+        failureCanRetry: Boolean,
+        isNewOrIncomplete: Boolean,
+        missingExpectedDate: Boolean,
+        retryableFailure: Boolean,
+    ): Boolean =
+        forceRebuild ||
+            (failureCanRetry && (isNewOrIncomplete || missingExpectedDate || retryableFailure))
+
     private fun MarketCacheInfo.resolvedExpectedDateIsFresh(): Boolean {
-        val generatedAtTime = runCatching { LocalDateTime.parse(generatedAt) }.getOrNull() ?: return false
+        val resolvedAtTime = runCatching { LocalDateTime.parse(expectedTradeDateResolvedAt) }.getOrNull() ?: return false
         val now = LocalDateTime.now(chinaZone)
-        if (generatedAtTime.isAfter(now)) return false
-        return Duration.between(generatedAtTime, now).toMinutes() <= RESOLVED_EXPECTED_DATE_CACHE_MINUTES
+        if (resolvedAtTime.isAfter(now)) return false
+        return Duration.between(resolvedAtTime, now).toMinutes() <= RESOLVED_EXPECTED_DATE_CACHE_MINUTES
     }
 
     private suspend fun resolveExpectedTradeDate(
@@ -657,8 +801,9 @@ object CacheMarketRepository {
         context: Context,
         expectedDate: String,
         calendarExpectedDate: String,
+        resolvedAt: String,
     ) {
-        if (expectedDate.isBlank() || calendarExpectedDate.isBlank()) return
+        if (expectedDate.isBlank() || calendarExpectedDate.isBlank() || resolvedAt.isBlank()) return
         val file = cacheFile(context) ?: return
         val writableFile = if (file.canOpenForWrite()) {
             file
@@ -667,38 +812,44 @@ object CacheMarketRepository {
         }
         SQLiteDatabase.openOrCreateDatabase(writableFile, null).use { db ->
             initSchema(db)
-            updateMetadata(
-                db = db,
-                nowText = LocalDateTime.now(chinaZone).toString(),
-                expectedDate = expectedDate,
-                calendarExpectedDate = calendarExpectedDate,
-            )
+            mapOf(
+                "last_expected_trade_date" to expectedDate,
+                "last_calendar_expected_trade_date" to calendarExpectedDate,
+                "expected_trade_date_resolved_at" to resolvedAt,
+            ).forEach { (key, value) ->
+                db.execSQL(
+                    "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+                    arrayOf(key, value),
+                )
+            }
         }
     }
 
     private suspend fun buildUpdateTargets(
         file: File,
         candidates: List<MarketCacheStockCandidate>,
-        currentInfo: MarketCacheInfo,
         expectedDate: String,
+        minAmount: Double,
         forceRebuild: Boolean,
         onProgress: suspend (String) -> Unit,
     ): List<MarketCacheUpdateTarget> {
         val today = todayRetryDate()
-        val currentCodes = candidates.map { it.stock.tsCode }.toSet()
+        val eligibleCandidates = candidates.filter {
+            isEligibleForKlineUpdate(it.stock.currentAmount, minAmount)
+        }
+        val currentCodes = eligibleCandidates.map { it.stock.tsCode }.toSet()
 
         val targets = SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             initSchema(db)
             deleteObsoleteFailures(db, currentCodes)
             val cachedStates = loadCachedStockStates(db)
             val failureStates = loadFailureStates(db)
-            val cacheDateIsLatest = currentInfo.exists && currentInfo.dateEnd >= expectedDate
             var skippedByRetryLimit = 0
             var newCount = 0
             var missingDateCount = 0
             var failureCount = 0
 
-            val planned = candidates.mapNotNull { candidate ->
+            val planned = eligibleCandidates.mapNotNull { candidate ->
                 val tsCode = candidate.stock.tsCode
                 val cached = cachedStates[tsCode]
                 val failure = failureStates[tsCode]
@@ -709,12 +860,13 @@ object CacheMarketRepository {
 
                 val isNewOrIncomplete = cached == null || cached.barCount < SIGNAL_LOOKBACK_TRADE_DAYS
                 val missingExpectedDate = cached?.latestTradeDate.orEmpty() < expectedDate
-                val shouldUpdate = when {
-                    forceRebuild -> true
-                    cacheDateIsLatest -> retryableFailure
-                    !failure.canRetryOrTrue(today) -> false
-                    else -> isNewOrIncomplete || missingExpectedDate || retryableFailure
-                }
+                val shouldUpdate = shouldUpdateCacheCandidate(
+                    forceRebuild = forceRebuild,
+                    failureCanRetry = failure?.canRetry(today) ?: true,
+                    isNewOrIncomplete = isNewOrIncomplete,
+                    missingExpectedDate = missingExpectedDate,
+                    retryableFailure = retryableFailure,
+                )
 
                 if (!shouldUpdate) return@mapNotNull null
 
@@ -863,14 +1015,33 @@ object CacheMarketRepository {
         candidates: List<MarketCacheStockCandidate>,
         nowText: String,
     ) {
+        val currentCodes = candidates.map { it.stock.tsCode }.toSet()
+        val obsoleteCodes = mutableSetOf<String>()
+        db.rawQuery("SELECT ts_code FROM stocks", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                val tsCode = cursor.getString(0)
+                if (tsCode !in currentCodes) obsoleteCodes += tsCode
+            }
+        }
+        if (obsoleteCodes.isNotEmpty()) {
+            clearSignalResultsForCodes(db, obsoleteCodes)
+            obsoleteCodes.chunked(SQLITE_MAX_VARIABLES).forEach { chunk ->
+                val placeholders = chunk.joinToString(",") { "?" }
+                db.execSQL(
+                    "DELETE FROM stocks WHERE ts_code IN ($placeholders)",
+                    chunk.toTypedArray(),
+                )
+            }
+        }
         candidates.forEach { candidate ->
-            upsertStock(db, candidate.stock, nowText)
+            upsertStock(db, candidate.stock, candidate.source, nowText)
         }
     }
 
     private fun upsertStock(
         db: SQLiteDatabase,
         stock: MarketCacheStockRecord,
+        source: String,
         nowText: String,
     ) {
         db.execSQL(
@@ -888,7 +1059,7 @@ object CacheMarketRepository {
                 if (stock.isSt) 1 else 0,
                 stock.currentPrice,
                 stock.currentAmount,
-                "sina",
+                source,
                 nowText,
             ),
         )
@@ -915,7 +1086,7 @@ object CacheMarketRepository {
                 stock.currentPrice,
                 stock.currentPrice,
                 stock.currentAmount,
-                "sina",
+                source,
                 nowText,
                 stock.symbol,
             ),
@@ -1004,7 +1175,11 @@ object CacheMarketRepository {
     }
 
     private fun deleteObsoleteFailures(db: SQLiteDatabase, currentCodes: Set<String>) {
-        if (!db.tableExists("cache_update_failures") || currentCodes.isEmpty()) return
+        if (!db.tableExists("cache_update_failures")) return
+        if (currentCodes.isEmpty()) {
+            db.execSQL("DELETE FROM cache_update_failures")
+            return
+        }
         val obsoleteCodes = mutableListOf<String>()
         db.rawQuery("SELECT ts_code FROM cache_update_failures", null).use { cursor ->
             while (cursor.moveToNext()) {
@@ -1042,18 +1217,23 @@ object CacheMarketRepository {
         nowText: String,
         expectedDate: String,
         calendarExpectedDate: String,
+        expectedDateResolvedAt: String?,
     ) {
-        val values = mapOf(
-            "schema_version" to "1",
+        val values = mutableMapOf(
+            "schema_version" to CACHE_SCHEMA_VERSION,
             "generated_at" to nowText,
-            "stock_source" to "sina",
-            "kline_source" to "sina_primary_tencent_fallback_gap_incremental",
+            "stock_source" to "sina_primary_tencent_fallback",
+            "kline_source" to "sina_primary_tencent_bfq_fallback_gap_incremental",
+            "price_mode" to CACHE_PRICE_MODE,
             "cache_days" to CACHE_KEEP_TRADE_DAYS.toString(),
             "last_expected_trade_date" to expectedDate,
             "last_calendar_expected_trade_date" to calendarExpectedDate,
             "stock_count" to db.count("stocks").toString(),
             "daily_bar_count" to db.count("daily_bars").toString(),
         )
+        if (!expectedDateResolvedAt.isNullOrBlank()) {
+            values["expected_trade_date_resolved_at"] = expectedDateResolvedAt
+        }
         values.forEach { (key, value) ->
             db.execSQL(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -1070,6 +1250,7 @@ object CacheMarketRepository {
         if (stock.isSt || bars.size < 260) return false
 
         val today = bars.last()
+        if (today.amount < config.minAmount) return false
         val firstBoardCandidate = today.pctChg >= stock.market.limitUpPct * config.nearLimitRatio
         if (firstBoardCandidate) return true
 
@@ -1080,6 +1261,14 @@ object CacheMarketRepository {
             (today.close - yesterday.close) / denominator >= config.reboundRatioThreshold &&
             today.close >= yesterday.open
         if (gameKLineCandidate) return true
+
+        val lastThree = bars.takeLast(3)
+        val buildThreeYangCandidate = lastThree.size == 3 && lastThree.all { it.close > it.open }
+        val lastFour = bars.takeLast(4)
+        val liftThreeYangCandidate = lastFour.size == 4 &&
+            lastFour.dropLast(1).all { it.close > it.open } &&
+            lastFour.last().close < lastFour.last().open
+        if (buildThreeYangCandidate || liftThreeYangCandidate) return true
 
         val last9 = bars.takeLast(9)
         val yangCount = last9.count { it.close > it.open }
@@ -1148,11 +1337,19 @@ object CacheMarketRepository {
             if (cursor.moveToFirst()) cursor.getStringOrEmpty(0) else ""
         }
 
-    private fun loadEvaluableCodes(db: SQLiteDatabase, cutoffTradeDate: String): List<String> {
+    private fun loadEvaluableCodes(
+        db: SQLiteDatabase,
+        cacheTradeDate: String,
+    ): List<String> {
         val codes = mutableListOf<String>()
         db.rawQuery(
-            "SELECT DISTINCT ts_code FROM daily_bars WHERE trade_date >= ? ORDER BY ts_code",
-            arrayOf(cutoffTradeDate),
+            """
+            SELECT DISTINCT ts_code
+            FROM daily_bars
+            WHERE trade_date = ?
+            ORDER BY ts_code
+            """.trimIndent(),
+            arrayOf(cacheTradeDate),
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 codes += cursor.getString(0)
@@ -1230,6 +1427,30 @@ object CacheMarketRepository {
         return signals
     }
 
+    private fun storeSignalEvaluations(
+        db: SQLiteDatabase,
+        ruleKey: String,
+        writes: List<SignalEvaluationWrite>,
+    ) {
+        if (writes.isEmpty()) return
+        db.beginTransaction()
+        try {
+            writes.forEach { write ->
+                storeSignalEvaluation(
+                    db = db,
+                    ruleKey = ruleKey,
+                    tradeDate = write.tradeDate,
+                    tsCode = write.tsCode,
+                    signals = write.signals,
+                    nowText = write.evaluatedAt,
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     private fun storeSignalEvaluation(
         db: SQLiteDatabase,
         ruleKey: String,
@@ -1297,11 +1518,18 @@ object CacheMarketRepository {
 
     private fun cleanObsoleteSignalResults(
         db: SQLiteDatabase,
+        currentRuleKey: String,
         currentTradeDate: String,
         currentCodes: Set<String>,
     ) {
-        db.execSQL("DELETE FROM strategy_signal_results WHERE trade_date != ?", arrayOf(currentTradeDate))
-        db.execSQL("DELETE FROM strategy_evaluations WHERE trade_date != ?", arrayOf(currentTradeDate))
+        db.execSQL(
+            "DELETE FROM strategy_signal_results WHERE rule_key != ? OR trade_date != ?",
+            arrayOf(currentRuleKey, currentTradeDate),
+        )
+        db.execSQL(
+            "DELETE FROM strategy_evaluations WHERE rule_key != ? OR trade_date != ?",
+            arrayOf(currentRuleKey, currentTradeDate),
+        )
         if (currentCodes.isEmpty()) return
 
         val obsoleteCodes = mutableListOf<String>()
@@ -1460,21 +1688,36 @@ object CacheMarketRepository {
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
 
-    private fun SQLiteDatabase.dateCoverageRatio(tradeDate: String): Double {
+    private fun SQLiteDatabase.dateCoverageRatio(tradeDate: String, minAmount: Double): Double {
         if (tradeDate.isBlank() || !tableExists("stocks") || !tableExists("daily_bars")) return 0.0
-        val stockTotal = count("stocks")
+        val stockTotal = rawQuery(
+            "SELECT COUNT(*) FROM stocks WHERE current_amount >= ?",
+            arrayOf(minAmount.toString()),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
         if (stockTotal <= 0) return 0.0
         val covered = rawQuery(
-            "SELECT COUNT(DISTINCT ts_code) FROM daily_bars WHERE trade_date = ?",
-            arrayOf(tradeDate),
+            """
+            SELECT COUNT(DISTINCT bars.ts_code)
+            FROM daily_bars AS bars
+            JOIN stocks AS stocks ON stocks.ts_code = bars.ts_code
+            WHERE bars.trade_date = ? AND stocks.current_amount >= ?
+            """.trimIndent(),
+            arrayOf(tradeDate, minAmount.toString()),
         ).use { cursor ->
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
         return covered.toDouble() / stockTotal.toDouble()
     }
 
-    private fun CacheFailureState?.canRetryOrTrue(today: String): Boolean =
-        this?.canRetry(today) ?: true
+    private fun cacheDatabaseFiles(database: File): List<File> =
+        listOf(
+            database,
+            File("${database.absolutePath}-journal"),
+            File("${database.absolutePath}-wal"),
+            File("${database.absolutePath}-shm"),
+        )
 
     private fun recentTradeDateCutoff(db: SQLiteDatabase, limit: Int): String =
         db.rawQuery(

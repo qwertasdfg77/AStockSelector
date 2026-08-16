@@ -19,8 +19,8 @@ android {
         applicationId = "com.codex.astockselector"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.3.2"
+        versionCode = 26
+        versionName = "0.3.4"
     }
 
     signingConfigs {
@@ -47,6 +47,11 @@ android {
         compose = true
     }
 
+    lint {
+        // AndroidX is intentionally pinned to the compileSdk 35 compatibility baseline.
+        disable += "GradleDependency"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -69,11 +74,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.12.0")
-    implementation("com.squareup.retrofit2:retrofit:2.12.0")
+    implementation("com.google.code.gson:gson:2.13.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import py_compile
+import re
 import sys
 from pathlib import Path
 
@@ -78,12 +79,45 @@ def require_document_text_scan() -> None:
             fail(f"{workflow_name} must run scripts/check-doc-text.py")
 
 
+def require_pinned_actions() -> None:
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        for line_number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), start=1):
+            if "uses:" not in line:
+                continue
+            match = re.search(r"uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s|#|$)", line)
+            if match is None:
+                fail(f"{workflow.name}:{line_number} must pin uses: to a full commit SHA")
+
+
+def require_android_lint() -> None:
+    for workflow_name in ["android-ci.yml", "release-apk.yml"]:
+        text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        if ":app:lintDebug" not in text:
+            fail(f"{workflow_name} must run :app:lintDebug")
+
+
+def require_supply_chain_guards() -> None:
+    wrapper = (ROOT / "gradle" / "wrapper" / "gradle-wrapper.properties").read_text(encoding="utf-8")
+    if "validateDistributionUrl=true" not in wrapper:
+        fail("Gradle wrapper must validate its distribution URL")
+    if not re.search(r"distributionSha256Sum=[0-9a-f]{64}", wrapper):
+        fail("Gradle wrapper must pin distributionSha256Sum")
+
+    release = release_workflow_text()
+    for token in ["EXPECTED_SIGNER_SHA256", "--expected-signer-sha256", "--previous-latest-json"]:
+        if token not in release:
+            fail(f"release workflow is missing supply-chain guard: {token}")
+
+
 def main() -> None:
     compile_python_scripts()
     workflows = parse_workflows()
     require_concurrency(workflows)
     check_release_only_uploads_release_apk()
     require_document_text_scan()
+    require_pinned_actions()
+    require_android_lint()
+    require_supply_chain_guards()
     print("CI config check passed.")
 
 

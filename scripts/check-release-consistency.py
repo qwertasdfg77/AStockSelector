@@ -55,6 +55,10 @@ required_snippets = {
         f"# AStockSelector {version_name}",
         f"v{version_name}",
     ],
+    "scripts/generate-prd.py": [
+        f'VERSION_NAME = "{version_name}"',
+        f"VERSION_CODE = {version_code}",
+    ],
 }
 
 for path, snippets in required_snippets.items():

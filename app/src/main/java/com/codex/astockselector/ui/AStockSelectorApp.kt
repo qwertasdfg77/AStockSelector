@@ -1,9 +1,9 @@
 package com.codex.astockselector.ui
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
@@ -43,7 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -73,7 +72,7 @@ import com.codex.astockselector.data.CacheMarketRepository
 import com.codex.astockselector.data.LastSignalStore
 import com.codex.astockselector.data.MarketCacheInfo
 import com.codex.astockselector.data.MarketUpdateStore
-import com.codex.astockselector.data.SavedSignalSnapshot
+import com.codex.astockselector.data.SignalSnapshotPolicy
 import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
@@ -82,6 +81,7 @@ import com.codex.astockselector.service.MarketUpdateService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,9 +92,8 @@ fun AStockSelectorApp() {
     val updateState by MarketUpdateStore.state.collectAsState()
 
     var selectedTab by remember { mutableStateOf(AppTab.Today) }
-    var nearMaPct by remember { mutableDoubleStateOf(0.05) }
-    var minAmount by remember { mutableDoubleStateOf(50_000_000.0) }
-    var notifyEnabled by remember { mutableStateOf(true) }
+    var nearMaPct by remember { mutableDoubleStateOf(loadNearMaPct(context)) }
+    var minAmount by remember { mutableDoubleStateOf(loadMinAmount(context)) }
     var enabledStrategies by remember { mutableStateOf(loadSelectedStrategies(context)) }
     var dataSource by remember { mutableStateOf(updateState.dataSource) }
     var statusText by remember { mutableStateOf(updateState.statusText) }
@@ -142,12 +141,13 @@ fun AStockSelectorApp() {
         isLoading = updateState.isRunning
         if (updateState.finished) {
             if (updateState.errorText == null) {
-                val latestCacheInfo = CacheMarketRepository.cacheInfo(context)
+                val latestCacheInfo = CacheMarketRepository.cacheInfo(context, config.minAmount)
                 val saved = LastSignalStore.load(context)
-                val nextNewSignalCodes = updateState.signals.newSignalCodesComparedWith(
+                val nextNewSignalCodes = SignalSnapshotPolicy.newSignalCodes(
+                    currentSignals = updateState.signals,
                     saved = saved,
                     ruleKey = config.strategyRuleKey(),
-                    statusText = updateState.statusText,
+                    reusedPreviousResult = updateState.statusText.contains("直接使用上次全量筛选结果"),
                 )
                 cacheInfo = latestCacheInfo
                 newSignalCodes = nextNewSignalCodes
@@ -168,6 +168,7 @@ fun AStockSelectorApp() {
                     newSignalCodes = nextNewSignalCodes,
                 )
             }
+            MarketUpdateStore.consumeCompletion()
             selectedTab = AppTab.Today
         } else if (updateState.signals.isNotEmpty()) {
             signals = updateState.signals
@@ -175,9 +176,9 @@ fun AStockSelectorApp() {
     }
 
     LaunchedEffect(Unit) {
-        cacheInfo = CacheMarketRepository.cacheInfo(context)
+        cacheInfo = CacheMarketRepository.cacheInfo(context, config.minAmount)
         LastSignalStore.load(context)?.let { saved ->
-            if (saved.ruleKey.equivalentSignalRuleKey(config.strategyRuleKey())) {
+            if (SignalSnapshotPolicy.rulesEquivalent(saved.ruleKey, config.strategyRuleKey())) {
                 signals = saved.signals
                 dataSource = saved.dataSource
                 statusText = saved.statusText
@@ -214,18 +215,17 @@ fun AStockSelectorApp() {
         MarketUpdateStore.start(statusText, "智能更新")
 
         scope.launch {
-            val freshness = CacheMarketRepository.cacheFreshness(context)
+            val freshness = CacheMarketRepository.cacheFreshness(context, config.minAmount)
             cacheInfo = freshness.info
             val saved = LastSignalStore.load(context)
-            val canReuse = freshness.isLatest &&
-                saved != null &&
-                saved.cacheDate == freshness.info.dateEnd &&
-                saved.ruleKey.equivalentSignalRuleKey(ruleKey) &&
-                saved.signals.isNotEmpty()
+            val reusableSnapshot = saved?.takeIf {
+                freshness.isLatest &&
+                    SignalSnapshotPolicy.canReuse(it, freshness.info.dateEnd, ruleKey)
+            }
 
-            if (canReuse) {
+            if (reusableSnapshot != null) {
                 val message = "缓存已是收盘最新数据（${freshness.info.dateEnd}），规则未变化，直接使用上次全量筛选结果。"
-                MarketUpdateStore.complete(saved.signals, message, "智能更新")
+                MarketUpdateStore.complete(reusableSnapshot.signals, message, "智能更新")
                 return@launch
             }
 
@@ -242,11 +242,7 @@ fun AStockSelectorApp() {
             val intent = Intent(context, MarketUpdateService::class.java)
                 .putExtra(MarketUpdateService.EXTRA_NEAR_MA_PCT, nearMaPct)
                 .putExtra(MarketUpdateService.EXTRA_MIN_AMOUNT, minAmount)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startForegroundService(intent)
         }
     }
 
@@ -261,16 +257,12 @@ fun AStockSelectorApp() {
             .putExtra(MarketUpdateService.EXTRA_NEAR_MA_PCT, nearMaPct)
             .putExtra(MarketUpdateService.EXTRA_MIN_AMOUNT, minAmount)
             .putExtra(MarketUpdateService.EXTRA_REBUILD_CACHE, true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
+        context.startForegroundService(intent)
     }
 
     fun refreshCacheInfo() {
         scope.launch {
-            cacheInfo = CacheMarketRepository.cacheInfo(context)
+            cacheInfo = CacheMarketRepository.cacheInfo(context, config.minAmount)
             statusText = if (cacheInfo.exists) {
                 "已发现本地缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线，失败队列 ${cacheInfo.failedStockCount} 只。"
             } else {
@@ -319,7 +311,7 @@ fun AStockSelectorApp() {
         val currentLabel = AppUpdateRepository.currentVersionLabel(context)
         appUpdateStatus = "当前版本：$currentLabel。\n准备下载新版 ${latest.versionName}..."
         scope.launch {
-            runCatching {
+            val downloadResult = runCatching {
                 AppUpdateRepository.downloadAndVerify(context, latest) { progress ->
                     withContext(Dispatchers.Main) {
                         appUpdateDownloadProgress = progress
@@ -330,12 +322,23 @@ fun AStockSelectorApp() {
                         )
                     }
                 }
-            }.onSuccess { apk ->
-                pendingAppUpdate = null
-                appUpdateDownloadProgress = null
-                appUpdateStatus =
-                    "当前版本：$currentLabel。\n新版 ${latest.versionName} 已通过 SHA256 和大小校验，正在打开安装器。"
-                context.startActivity(AppUpdateRepository.installIntent(context, apk))
+            }
+            downloadResult.onSuccess { apk ->
+                runCatching {
+                    context.startActivity(AppUpdateRepository.installIntent(context, apk))
+                }.onSuccess {
+                    pendingAppUpdate = null
+                    appUpdateDownloadProgress = null
+                    appUpdateStatus =
+                        "当前版本：$currentLabel。\n新版 ${latest.versionName} 已通过 SHA256 和大小校验，已打开安装器。"
+                }.onFailure { error ->
+                    appUpdateDownloadProgress = null
+                    appUpdateStatus = buildAppUpdateFailureStatus(
+                        currentLabel = currentLabel,
+                        title = "新版 ${latest.versionName} 已校验，但打开安装器失败",
+                        error = error,
+                    )
+                }
             }.onFailure { error ->
                 appUpdateDownloadProgress = null
                 appUpdateStatus = buildAppUpdateFailureStatus(
@@ -406,11 +409,15 @@ fun AStockSelectorApp() {
 
                 AppTab.Settings -> SettingsPage(
                     nearMaPct = nearMaPct,
-                    onNearMaPctChange = { nearMaPct = it.toNearMaStep() },
+                    onNearMaPctChange = { value ->
+                        nearMaPct = value.toNearMaStep()
+                        saveNearMaPct(context, nearMaPct)
+                    },
                     minAmount = minAmount,
-                    onMinAmountChange = { minAmount = it.toMinAmountStep() },
-                    notifyEnabled = notifyEnabled,
-                    onNotifyEnabledChange = { notifyEnabled = it },
+                    onMinAmountChange = { value ->
+                        minAmount = value.toMinAmountStep()
+                        saveMinAmount(context, minAmount)
+                    },
                     enabledStrategies = enabledStrategies,
                     onStrategyToggle = ::toggleStrategy,
                     dataSource = dataSource,
@@ -451,6 +458,8 @@ private enum class StrategyOption(
     NineYang("九阳蓄势", "九阳蓄势"),
     GameKLine("博弈K", "博弈K"),
     LowLevelStart("低位启动", "低位启动"),
+    BuildThreeYang("建仓三阳", "建仓三阳"),
+    LiftThreeYang("拉升三阳", "拉升三阳"),
 }
 
 private fun List<StrategySignal>.filterByStrategies(options: Set<StrategyOption>): List<StrategySignal> {
@@ -480,52 +489,15 @@ private fun List<StrategySignal>.prioritizeNewSignals(newSignalCodes: Set<String
     return newSignals + oldSignals
 }
 
-private fun List<StrategySignal>.newSignalCodesComparedWith(
-    saved: SavedSignalSnapshot?,
-    ruleKey: String,
-    statusText: String,
-): Set<String> {
-    if (statusText.contains("直接使用上次全量筛选结果")) {
-        return saved?.newSignalCodes.orEmpty()
-    }
-    if (saved == null || !saved.ruleKey.equivalentSignalRuleKey(ruleKey) || saved.signals.isEmpty()) {
-        return emptySet()
-    }
-
-    val previousCodes = saved.signals.map { it.stock.tsCode }.toSet()
-    if (previousCodes.isEmpty()) return emptySet()
-    return map { it.stock.tsCode }.toSet() - previousCodes
-}
-
-private fun String.equivalentSignalRuleKey(other: String): Boolean =
-    normalizeSignalRuleKey() == other.normalizeSignalRuleKey()
-
-private fun String.normalizeSignalRuleKey(): String =
-    split("|").joinToString("|") { part ->
-        val pieces = part.split("=", limit = 2)
-        if (pieces.size != 2) {
-            part
-        } else {
-            val value = pieces[1].toDoubleOrNull()
-                ?.let { numericValue ->
-                    String.format(java.util.Locale.US, "%.6f", numericValue)
-                        .trimEnd('0')
-                        .trimEnd('.')
-                }
-                ?: pieces[1]
-            "${pieces[0]}=$value"
-        }
-    }
-
 private fun buildAppUpdateAvailableStatus(result: AppUpdateCheckResult): String =
     "当前版本：${result.currentVersion.label}。\n" +
-        "发现新版：${result.latest.versionName}（${result.latest.versionCode}）。\n" +
+        "发现新版：${result.latest.versionName}。\n" +
         "更新说明：${result.latest.releaseNotes.ifBlank { "暂无更新说明。" }}\n" +
         "点击“下载更新”后会下载 APK，校验 SHA256 和大小，通过后再打开安装器。"
 
 private fun buildAppUpdateCurrentStatus(result: AppUpdateCheckResult): String =
     "当前版本：${result.currentVersion.label}。\n" +
-        "最新版本：${result.latest.versionName}（${result.latest.versionCode}）。\n" +
+        "最新版本：${result.latest.versionName}。\n" +
         "当前已是最新版本。"
 
 private fun buildAppUpdateDownloadStatus(
@@ -561,7 +533,7 @@ private fun buildAppUpdateFailureStatus(
 
 private fun Long.toMegabytesText(): String =
     if (this > 0L) {
-        String.format("%.1fMB", this / 1024.0 / 1024.0)
+        String.format(Locale.US, "%.1fMB", this / 1024.0 / 1024.0)
     } else {
         "未知大小"
     }
@@ -651,6 +623,39 @@ private fun buildDisplayStatusText(
 
 private const val STRATEGY_PREFS_NAME = "strategy_selection"
 private const val STRATEGY_PREFS_KEY = "enabled_strategies"
+private const val FILTER_PREFS_NAME = "filter_settings"
+private const val FILTER_PREFS_NEAR_MA_PCT = "near_ma_pct"
+private const val FILTER_PREFS_MIN_AMOUNT = "min_amount"
+
+private fun loadNearMaPct(context: Context): Double =
+    context
+        .getSharedPreferences(FILTER_PREFS_NAME, Context.MODE_PRIVATE)
+        .getFloat(FILTER_PREFS_NEAR_MA_PCT, StrategyConfig().nearMaPct.toFloat())
+        .toDouble()
+        .toNearMaStep()
+
+private fun saveNearMaPct(context: Context, value: Double) {
+    context
+        .getSharedPreferences(FILTER_PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putFloat(FILTER_PREFS_NEAR_MA_PCT, value.toNearMaStep().toFloat())
+        .apply()
+}
+
+private fun loadMinAmount(context: Context): Double =
+    context
+        .getSharedPreferences(FILTER_PREFS_NAME, Context.MODE_PRIVATE)
+        .getLong(FILTER_PREFS_MIN_AMOUNT, StrategyConfig().minAmount.toLong())
+        .toDouble()
+        .toMinAmountStep()
+
+private fun saveMinAmount(context: Context, value: Double) {
+    context
+        .getSharedPreferences(FILTER_PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putLong(FILTER_PREFS_MIN_AMOUNT, value.toMinAmountStep().toLong())
+        .apply()
+}
 
 private fun loadSelectedStrategies(context: Context): Set<StrategyOption> {
     val saved = context
@@ -894,8 +899,6 @@ private fun SettingsPage(
     onNearMaPctChange: (Double) -> Unit,
     minAmount: Double,
     onMinAmountChange: (Double) -> Unit,
-    notifyEnabled: Boolean,
-    onNotifyEnabledChange: (Boolean) -> Unit,
     enabledStrategies: Set<StrategyOption>,
     onStrategyToggle: (StrategyOption) -> Unit,
     dataSource: String,
@@ -984,7 +987,7 @@ private fun SettingsPage(
         }
         item {
             SettingCard {
-                Text("年线/均线附近范围：${String.format("%.1f", nearMaPct * 100)}%")
+                Text("年线/均线附近范围：${String.format(Locale.US, "%.1f", nearMaPct * 100)}%")
                 Slider(
                     value = nearMaPct.toNearMaStep().toFloat(),
                     onValueChange = { onNearMaPctChange(it.toDouble().toNearMaStep()) },
@@ -1001,7 +1004,7 @@ private fun SettingsPage(
         }
         item {
             SettingCard {
-                Text("最低成交额：${String.format("%.0f", minAmount / 10_000)}万")
+                Text("最低成交额：${String.format(Locale.US, "%.0f", minAmount / 10_000)}万")
                 Slider(
                     value = (minAmount.toMinAmountStep() / 100_000_000.0).toFloat(),
                     onValueChange = { onMinAmountChange((it.toDouble() * 100_000_000.0).toMinAmountStep()) },
@@ -1018,36 +1021,13 @@ private fun SettingsPage(
         }
         item {
             SettingCard {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("每日收盘后提醒")
-                        Text(
-                            "后续可继续接入自动定时更新。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                        )
-                    }
-                    Switch(
-                        checked = notifyEnabled,
-                        onCheckedChange = onNotifyEnabledChange,
-                        enabled = !isLoading,
-                    )
-                }
-            }
-        }
-        item {
-            SettingCard {
                 Text("数据更新与筛选", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     if (cacheInfo.exists) {
-                        "已发现缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线，${String.format("%.1f", cacheInfo.sizeMb)}MB。\n" +
+                        "已发现缓存：${cacheInfo.stockCount} 只股票，${cacheInfo.dailyBarCount} 行K线，${String.format(Locale.US, "%.1f", cacheInfo.sizeMb)}MB。\n" +
                             "日期范围：${cacheInfo.dateStart.ifBlank { "-" }} 到 ${cacheInfo.dateEnd.ifBlank { "-" }}。\n" +
-                            "最新日覆盖率：${String.format("%.1f", cacheInfo.latestDateCoveragePct)}%，失败队列：${cacheInfo.failedStockCount} 只，可重试 ${cacheInfo.retryableFailedStockCount} 只。"
+                            "最新日覆盖率：${String.format(Locale.US, "%.1f", cacheInfo.latestDateCoveragePct)}%，失败队列：${cacheInfo.failedStockCount} 只，可重试 ${cacheInfo.retryableFailedStockCount} 只。"
                     } else {
                         "未发现 market_cache.db。点击后会先联网生成缓存，再筛选。"
                     },
@@ -1156,12 +1136,11 @@ private fun RoundSliderThumb(enabled: Boolean) {
     )
 }
 
+@SuppressLint("BatteryLife")
 private fun requestIgnoreBatteryOptimizations(context: Context) {
     val packageName = context.packageName
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-        !powerManager.isIgnoringBatteryOptimizations(packageName)
-    ) {
+    if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
             data = Uri.parse("package:$packageName")
         }
