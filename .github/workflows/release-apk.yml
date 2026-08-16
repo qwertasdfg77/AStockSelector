@@ -90,11 +90,12 @@ jobs:
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk > release-signing-report.txt
-          ACTUAL_SIGNER_SHA256="$(grep -i 'certificate SHA-256 digest:' release-signing-report.txt | head -n 1 | awk -F ': ' '{print tolower($2)}' | tr -d '[:space:]')"
-          if [ "$ACTUAL_SIGNER_SHA256" != "$EXPECTED_SIGNER_SHA256" ]; then
-            echo "Unexpected signing certificate SHA256: $ACTUAL_SIGNER_SHA256"
-            exit 1
-          fi
+          python scripts/check-release-artifact.py \
+            --apk app/build/outputs/apk/release/app-release.apk \
+            --require-signed \
+            --signing-report release-signing-report.txt \
+            --expected-signer-sha256 "$EXPECTED_SIGNER_SHA256" \
+            --apksigner "$APKSIGNER"
 
       - name: Collect APK files
         shell: bash

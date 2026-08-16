@@ -104,7 +104,13 @@ def require_supply_chain_guards() -> None:
         fail("Gradle wrapper must pin distributionSha256Sum")
 
     release = release_workflow_text()
-    for token in ["EXPECTED_SIGNER_SHA256", "--expected-signer-sha256", "--previous-latest-json"]:
+    for token in [
+        "EXPECTED_SIGNER_SHA256",
+        "--require-signed",
+        "--expected-signer-sha256",
+        "--apksigner",
+        "--previous-latest-json",
+    ]:
         if token not in release:
             fail(f"release workflow is missing supply-chain guard: {token}")
 
