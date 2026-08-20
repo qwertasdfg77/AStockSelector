@@ -1,5 +1,5 @@
 -- AStockSelector runtime SQLite schema
--- Version: 0.3.4 / schema_version 2
+-- Version: 0.3.5 / schema_version 2
 -- Database file: market_cache.db
 --
 -- This file documents the tables created by CacheMarketRepository.

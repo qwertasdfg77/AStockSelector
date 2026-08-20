@@ -21,8 +21,8 @@ from reportlab.platypus import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION_NAME = "0.3.4"
-VERSION_CODE = 26
+VERSION_NAME = "0.3.5"
+VERSION_CODE = 27
 OUTPUT = ROOT / "docs" / "AStockSelector_PRD.pdf"
 
 pdfmetrics.registerFont(TTFont("YaHei", r"C:\Windows\Fonts\msyh.ttc"))
@@ -243,7 +243,7 @@ story = [
     Paragraph("AStockSelector", styles["CNTitle"]),
     Paragraph("A 股日线策略选股器 · 产品需求文档", styles["CNSubtitle"]),
     Spacer(1, 7 * mm),
-    callout(f"版本：{VERSION_NAME}　Android versionCode：{VERSION_CODE}　文档日期：2026-08-16", LIGHT_GREEN),
+    callout(f"版本：{VERSION_NAME}　Android versionCode：{VERSION_CODE}　文档日期：2026-08-20", LIGHT_GREEN),
     Spacer(1, 12 * mm),
     body("面向个人自用的纯 Android A 股日线筛选工具。App 在手机端读取公开行情、维护本地 SQLite 缓存，并按六个预设战法生成今日信号。"),
     Spacer(1, 4 * mm),
@@ -309,8 +309,8 @@ story = [
             ["九阳蓄势", "9 日至少 7 阳、累计涨幅不超 25%、至少 4 日靠近 MA250、年线走平向上、收盘在年线上。", "评分制，总分至少 85。"],
             ["博弈K", "前阴后阳、修复 80% 以上、阳包阴、距 MA20/60/250 不超 3%、收盘强度 80%、量比 1.2。", "全部为硬条件，通过后得分 100。"],
             ["低位启动", "靠近 120 日低点、低点稳定、30 日收敛、站上 MA20、靠近 MA60、放量阳线、接近 20 日高点。", "全部为硬条件，通过后得分 100。"],
-            ["建仓三阳", "上升趋势中连续 3 至 5 阳、光头阳、前 5 日均量 3 倍放量，最新阳线缩量至 75%。", "全部为硬条件，通过后得分 100。"],
-            ["拉升三阳", "连续 3 日价量提高并创近 5 日新高，随后出现 3.5% 内缩量阴线且守住 MA10。", "全部为硬条件，通过后得分 100。"],
+            ["建仓三阳", "上升趋势中连续 3 至 5 根实体至少 20% 的阳线，包含非涨停光头阳及前一日 3 倍、前 5 日均量 1.5 倍的确认量。", "全部为硬条件，通过后得分 100。"],
+            ["拉升三阳", "最近 3 根实体至少 20% 的阳线量价逐日提高，第三阳收盘创近 5 日新高并直接形成信号。", "全部为硬条件，通过后得分 100。"],
         ],
         [28 * mm, 104 * mm, 42 * mm],
         AMBER,
@@ -330,7 +330,7 @@ story = [
     bullet("服务使用 START_NOT_STICKY；任务状态丢失后不会按默认参数意外重新启动。"),
     callout("前台服务和电池优化豁免只能降低被清理概率，不能承诺任何 Android 厂商系统都绝不终止进程。", LIGHT_AMBER),
     h2("4.2 App 内更新"),
-    bullet("界面只显示三段式版本号，例如 0.3.4；versionCode 仅用于内部新旧比较。"),
+    bullet("界面只显示三段式版本号，例如 0.3.5；versionCode 仅用于内部新旧比较。"),
     bullet("latest.json 必须包含版本、HTTPS 地址、APK SHA256、大小和更新说明。"),
     bullet("下载最多重试 3 次，中断或失败会清理 .part 和损坏 APK。"),
     bullet("大小及 SHA256 通过后才打开 Android 系统安装器。"),

@@ -1263,12 +1263,8 @@ object CacheMarketRepository {
         if (gameKLineCandidate) return true
 
         val lastThree = bars.takeLast(3)
-        val buildThreeYangCandidate = lastThree.size == 3 && lastThree.all { it.close > it.open }
-        val lastFour = bars.takeLast(4)
-        val liftThreeYangCandidate = lastFour.size == 4 &&
-            lastFour.dropLast(1).all { it.close > it.open } &&
-            lastFour.last().close < lastFour.last().open
-        if (buildThreeYangCandidate || liftThreeYangCandidate) return true
+        val threeYangCandidate = lastThree.size == 3 && lastThree.all { it.close > it.open }
+        if (threeYangCandidate) return true
 
         val last9 = bars.takeLast(9)
         val yangCount = last9.count { it.close > it.open }

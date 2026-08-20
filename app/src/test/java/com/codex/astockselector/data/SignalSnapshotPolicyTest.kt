@@ -63,6 +63,16 @@ class SignalSnapshotPolicyTest {
         )
     }
 
+    @Test
+    fun differentRuleVersionsCannotReuseSnapshot() {
+        assertFalse(
+            SignalSnapshotPolicy.rulesEquivalent(
+                "rules=three_yang_v1|minAmount=50000000",
+                "rules=three_yang_balanced_v2|minAmount=50000000",
+            ),
+        )
+    }
+
     private fun snapshot(
         signals: List<StrategySignal>,
         newCodes: Set<String> = emptySet(),

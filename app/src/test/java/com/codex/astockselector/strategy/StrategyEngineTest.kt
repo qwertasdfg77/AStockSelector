@@ -168,8 +168,8 @@ class StrategyEngineTest {
     }
 
     @Test
-    fun buildThreeYangSignalIsDetectedAtSeventyFivePercentShrinkBoundary() {
-        val firstYang = strategyBar("20261229", 10.05, 10.30, 10.00, 10.30, 10.00, 3.0, 3_500.0)
+    fun buildThreeYangSignalIsDetectedWithConfirmedThreefoldVolume() {
+        val firstYang = strategyBar("20261229", 10.05, 10.30, 10.00, 10.30, 10.00, 3.0, 3_000.0)
         val secondYang = strategyBar("20261230", 10.32, 10.62, 10.30, 10.60, 10.30, 2.91, 2_000.0)
         val signalYang = strategyBar("20261231", 10.62, 10.92, 10.60, 10.90, 10.60, 2.83, 1_500.0)
 
@@ -183,10 +183,10 @@ class StrategyEngineTest {
     }
 
     @Test
-    fun buildThreeYangRejectsVolumeAboveSeventyFivePercentOfYesterday() {
-        val firstYang = strategyBar("20261229", 10.05, 10.30, 10.00, 10.30, 10.00, 3.0, 3_500.0)
+    fun buildThreeYangRejectsVolumeBelowThreeTimesPreviousDay() {
+        val firstYang = strategyBar("20261229", 10.05, 10.30, 10.00, 10.30, 10.00, 3.0, 2_999.0)
         val secondYang = strategyBar("20261230", 10.32, 10.62, 10.30, 10.60, 10.30, 2.91, 2_000.0)
-        val signalYang = strategyBar("20261231", 10.62, 10.92, 10.60, 10.90, 10.60, 2.83, 1_501.0)
+        val signalYang = strategyBar("20261231", 10.62, 10.92, 10.60, 10.90, 10.60, 2.83, 1_500.0)
 
         val signals = StrategyEngine.evaluate(
             stock,
@@ -198,15 +198,29 @@ class StrategyEngineTest {
     }
 
     @Test
-    fun liftThreeYangSignalIsDetectedAfterThreeRisingPriceAndVolumeDays() {
-        val firstYang = strategyBar("20261228", 10.05, 10.35, 10.00, 10.30, 10.00, 3.0, 1_000.0)
-        val secondYang = strategyBar("20261229", 10.32, 10.65, 10.30, 10.60, 10.30, 2.91, 1_200.0)
-        val thirdYang = strategyBar("20261230", 10.62, 11.02, 10.60, 11.00, 10.60, 3.77, 1_400.0)
-        val signalBear = strategyBar("20261231", 10.95, 11.00, 10.70, 10.80, 11.00, -1.82, 1_050.0)
+    fun buildThreeYangRejectsLimitUpAsOnlyBaldBull() {
+        val firstYang = strategyBar("20261229", 10.20, 11.00, 10.10, 11.00, 10.00, 10.0, 3_000.0)
+        val secondYang = strategyBar("20261230", 11.02, 11.40, 11.00, 11.35, 11.00, 3.18, 2_000.0)
+        val signalYang = strategyBar("20261231", 11.37, 11.70, 11.35, 11.65, 11.35, 2.64, 1_500.0)
 
         val signals = StrategyEngine.evaluate(
             stock,
-            flatBars(256) + firstYang + secondYang + thirdYang + signalBear,
+            flatBars(257) + firstYang + secondYang + signalYang,
+            StrategyConfig(),
+        )
+
+        assertTrue(signals.none { it.strategy == "建仓三阳" })
+    }
+
+    @Test
+    fun liftThreeYangSignalIsDetectedOnThirdRisingPriceAndVolumeDay() {
+        val firstYang = strategyBar("20261229", 10.05, 10.35, 10.00, 10.30, 10.00, 3.0, 1_000.0)
+        val secondYang = strategyBar("20261230", 10.32, 10.65, 10.30, 10.60, 10.30, 2.91, 1_200.0)
+        val thirdYang = strategyBar("20261231", 10.62, 11.02, 10.60, 11.00, 10.60, 3.77, 1_400.0)
+
+        val signals = StrategyEngine.evaluate(
+            stock,
+            flatBars(257) + firstYang + secondYang + thirdYang,
             StrategyConfig(),
         )
 
@@ -214,11 +228,26 @@ class StrategyEngineTest {
     }
 
     @Test
-    fun liftThreeYangRejectsVolumeAboveSeventyFivePercentOfPreviousYang() {
+    fun liftThreeYangRejectsNonIncreasingVolume() {
+        val firstYang = strategyBar("20261229", 10.05, 10.35, 10.00, 10.30, 10.00, 3.0, 1_000.0)
+        val secondYang = strategyBar("20261230", 10.32, 10.65, 10.30, 10.60, 10.30, 2.91, 1_200.0)
+        val thirdYang = strategyBar("20261231", 10.62, 11.02, 10.60, 11.00, 10.60, 3.77, 1_200.0)
+
+        val signals = StrategyEngine.evaluate(
+            stock,
+            flatBars(257) + firstYang + secondYang + thirdYang,
+            StrategyConfig(),
+        )
+
+        assertTrue(signals.none { it.strategy == "拉升三阳" })
+    }
+
+    @Test
+    fun liftThreeYangRejectsFollowingBearishDay() {
         val firstYang = strategyBar("20261228", 10.05, 10.35, 10.00, 10.30, 10.00, 3.0, 1_000.0)
         val secondYang = strategyBar("20261229", 10.32, 10.65, 10.30, 10.60, 10.30, 2.91, 1_200.0)
         val thirdYang = strategyBar("20261230", 10.62, 11.02, 10.60, 11.00, 10.60, 3.77, 1_400.0)
-        val signalBear = strategyBar("20261231", 10.95, 11.00, 10.70, 10.80, 11.00, -1.82, 1_051.0)
+        val signalBear = strategyBar("20261231", 10.95, 11.00, 10.70, 10.80, 11.00, -1.82, 1_050.0)
 
         val signals = StrategyEngine.evaluate(
             stock,
