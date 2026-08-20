@@ -2,7 +2,7 @@
 
 ## 报告安全问题
 
-如果你发现安全问题，请优先通过 GitHub Issue 描述可复现步骤。不要在公开内容中粘贴个人 Token、密钥或隐私数据。
+如果你发现安全问题，请使用 GitHub 的[私密漏洞报告](https://github.com/qwertasdfg77/AStockSelector/security/advisories/new)提交复现步骤，不要先创建公开 Issue。不要在公开内容中粘贴个人 Token、密钥或隐私数据。
 
 ## 敏感信息
 

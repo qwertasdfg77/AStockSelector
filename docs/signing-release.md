@@ -97,7 +97,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 ## 发布 tag 示例
 
 ```powershell
-$Version = "0.3.5"
+$Version = "0.3.6"
 git tag "v$Version"
 git push origin "v$Version"
 ```

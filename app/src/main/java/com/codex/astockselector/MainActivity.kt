@@ -1,6 +1,7 @@
 package com.codex.astockselector
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import androidx.activity.ComponentActivity
@@ -11,7 +12,10 @@ import com.codex.astockselector.ui.AStockSelectorTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
         }
         setContent {

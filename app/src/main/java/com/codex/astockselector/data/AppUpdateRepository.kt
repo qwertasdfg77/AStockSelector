@@ -62,6 +62,7 @@ data class VerifiedUpdateApk(
 
 object AppUpdateRepository {
     const val UPDATE_REPOSITORY = "qwertasdfg77/astock-selector-updates"
+    internal const val MAX_UPDATE_APK_SIZE_BYTES = 256L * 1024L * 1024L
     private const val LATEST_JSON_URL =
         "https://raw.githubusercontent.com/$UPDATE_REPOSITORY/main/latest.json"
     private const val DEFAULT_APK_URL =
@@ -124,6 +125,9 @@ object AppUpdateRepository {
         }
         require(info.apkSize > 0L) {
             "更新信息缺少有效 APK 大小"
+        }
+        require(info.apkSize <= MAX_UPDATE_APK_SIZE_BYTES) {
+            "更新信息中的 APK 大小超过安全上限"
         }
     }
 
@@ -205,6 +209,10 @@ object AppUpdateRepository {
                     error("APK 下载失败：HTTP ${response.code}")
                 }
                 val body = response.body ?: error("APK 下载失败：响应为空")
+                val responseSize = body.contentLength()
+                if (responseSize > 0L && responseSize != latest.apkSize) {
+                    error("APK 大小校验失败：期望 ${latest.apkSize} 字节，服务器返回 $responseSize 字节")
+                }
                 val totalBytes = if (latest.apkSize > 0L) latest.apkSize else body.contentLength()
                 onProgress(
                     AppUpdateDownloadProgress(
@@ -222,6 +230,9 @@ object AppUpdateRepository {
                         while (true) {
                             val read = input.read(buffer)
                             if (read < 0) break
+                            if (bytesWritten > latest.apkSize - read.toLong()) {
+                                error("APK 大小校验失败：下载内容超过期望的 ${latest.apkSize} 字节")
+                            }
                             output.write(buffer, 0, read)
                             bytesWritten += read
 

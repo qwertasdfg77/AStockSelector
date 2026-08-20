@@ -883,6 +883,7 @@ object CacheMarketRepository {
                     } else {
                         INCREMENTAL_UPDATE_DAYS
                     },
+                    expectedTradeDate = expectedDate,
                 )
             }
 

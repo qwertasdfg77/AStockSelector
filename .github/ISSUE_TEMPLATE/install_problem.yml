@@ -21,7 +21,7 @@ body:
     id: apk
     attributes:
       label: APK 文件名
-      placeholder: 例如：AStockSelector-0.2.1-debug.apk
+      placeholder: 例如：AStockSelector-v版本-release.apk
   - type: textarea
     id: tried
     attributes:

@@ -35,6 +35,13 @@ def replace_once(text: str, pattern: str, repl, path: str) -> str:
     return updated
 
 
+def replace_exact(text: str, pattern: str, repl, expected_count: int, path: str) -> str:
+    updated, count = re.subn(pattern, repl, text, flags=re.MULTILINE)
+    if count != expected_count:
+        fail(f"expected {expected_count} matches in {path}: {pattern}; found {count}")
+    return updated
+
+
 def validate_version(version_name: str) -> None:
     parts = version_name.split(".")
     if len(parts) != 3 or not all(part.isdigit() for part in parts):
@@ -90,15 +97,85 @@ def update_readme(version_name: str, version_code: int) -> None:
     write_text("README.md", readme)
 
 
-def update_index(version_name: str) -> None:
+def update_index(version_name: str, version_code: int) -> None:
     index = read_text("docs/index.html")
+    index = replace_once(
+        index,
+        r"版本基线为 \d+\.\d+\.\d+ / versionCode \d+。",
+        f"版本基线为 {version_name} / versionCode {version_code}。",
+        "docs/index.html",
+    )
+    index = replace_once(
+        index,
+        r'(<p class="kicker">开源 Android · A 股日线策略筛选 · )\d+\.\d+\.\d+(</p>)',
+        rf"\g<1>{version_name}\g<2>",
+        "docs/index.html",
+    )
     index = replace_once(
         index,
         r'<div class="version">\d+\.\d+\.\d+</div>',
         f'<div class="version">{version_name}</div>',
         "docs/index.html",
     )
+    index = replace_once(
+        index,
+        r'(<p class="muted">versionCode )\d+( · Android)',
+        rf"\g<1>{version_code}\g<2>",
+        "docs/index.html",
+    )
+    index = replace_exact(
+        index,
+        r"AStockSelector_PRD\.pdf\?v=[^\"]+",
+        f"AStockSelector_PRD.pdf?v={version_name}",
+        2,
+        "docs/index.html",
+    )
+    index = replace_once(
+        index,
+        r'(MIT License · AStockSelector )\d+\.\d+\.\d+',
+        rf"\g<1>{version_name}",
+        "docs/index.html",
+    )
     write_text("docs/index.html", index)
+
+
+def update_prd_generator(version_name: str, version_code: int) -> None:
+    generator = read_text("scripts/generate-prd.py")
+    generator = replace_once(
+        generator,
+        r'^VERSION_NAME = "\d+\.\d+\.\d+"$',
+        f'VERSION_NAME = "{version_name}"',
+        "scripts/generate-prd.py",
+    )
+    generator = replace_once(
+        generator,
+        r"^VERSION_CODE = \d+$",
+        f"VERSION_CODE = {version_code}",
+        "scripts/generate-prd.py",
+    )
+    write_text("scripts/generate-prd.py", generator)
+
+
+def update_schema_doc(version_name: str) -> None:
+    schema = read_text("docs/AStockSelector_schema.sql")
+    schema = replace_once(
+        schema,
+        r"^-- Version: \d+\.\d+\.\d+ / schema_version (\d+)$",
+        rf"-- Version: {version_name} / schema_version \g<1>",
+        "docs/AStockSelector_schema.sql",
+    )
+    write_text("docs/AStockSelector_schema.sql", schema)
+
+
+def update_signing_doc(version_name: str) -> None:
+    signing = read_text("docs/signing-release.md")
+    signing = replace_once(
+        signing,
+        r'^\$Version = "\d+\.\d+\.\d+"$',
+        f'$Version = "{version_name}"',
+        "docs/signing-release.md",
+    )
+    write_text("docs/signing-release.md", signing)
 
 
 def update_changelog(version_name: str, notes: list[str]) -> None:
@@ -148,7 +225,7 @@ def write_release_doc(version_name: str, notes: list[str]) -> None:
 ## 已知限制
 
 - 当前主要基于日 K 数据，不包含实时分时数据。
-- 节假日判断未内置完整交易日历。
+- 节假日通过公开行情样本确认，仍依赖数据源正常返回。
 - 公开行情源可能存在延迟、限流或接口变化。
 
 ## 风险提示
@@ -161,6 +238,14 @@ def write_release_doc(version_name: str, notes: list[str]) -> None:
 def run_consistency_check() -> None:
     subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-release-consistency.py")],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def generate_prd() -> None:
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/generate-prd.py")],
         cwd=ROOT,
         check=True,
     )
@@ -193,9 +278,13 @@ def main() -> None:
     notes = args.notes or DEFAULT_NOTES
     update_gradle(args.version_name, args.version_code)
     update_readme(args.version_name, args.version_code)
-    update_index(args.version_name)
+    update_index(args.version_name, args.version_code)
+    update_prd_generator(args.version_name, args.version_code)
+    update_schema_doc(args.version_name)
+    update_signing_doc(args.version_name)
     update_changelog(args.version_name, notes)
     write_release_doc(args.version_name, notes)
+    generate_prd()
     run_consistency_check()
 
     print(f"Prepared AStockSelector {args.version_name} ({args.version_code}).")

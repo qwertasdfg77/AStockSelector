@@ -50,7 +50,16 @@ required_snippets = {
         f"Android `versionCode`：`{version_code}`",
     ],
     "CHANGELOG.md": [f"## {version_name}"],
-    "docs/index.html": [f'<div class="version">{version_name}</div>'],
+    "docs/index.html": [
+        f"版本基线为 {version_name} / versionCode {version_code}。",
+        f"开源 Android · A 股日线策略筛选 · {version_name}",
+        f'<div class="version">{version_name}</div>',
+        f"versionCode {version_code} · Android",
+        f"AStockSelector_PRD.pdf?v={version_name}",
+        f"MIT License · AStockSelector {version_name}",
+    ],
+    "docs/AStockSelector_schema.sql": [f"-- Version: {version_name} / schema_version"],
+    "docs/signing-release.md": [f'$Version = "{version_name}"'],
     f"docs/release-v{version_name}.md": [
         f"# AStockSelector {version_name}",
         f"v{version_name}",

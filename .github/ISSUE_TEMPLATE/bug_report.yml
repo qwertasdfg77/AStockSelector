@@ -30,7 +30,7 @@ body:
     id: app_version
     attributes:
       label: App 版本
-      placeholder: 0.2.1
+      placeholder: 例如：设置页显示的三段式版本号
   - type: textarea
     id: logs
     attributes:

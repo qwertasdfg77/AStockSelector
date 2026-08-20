@@ -206,6 +206,17 @@ fun AStockSelectorApp() {
         saveSelectedStrategies(context, nextStrategies)
     }
 
+    fun startMarketUpdateService(intent: Intent, dataSourceName: String) {
+        runCatching { context.startForegroundService(intent) }
+            .onFailure { error ->
+                val reason = error.message?.takeIf { it.isNotBlank() } ?: error::class.java.simpleName
+                MarketUpdateStore.fail(
+                    "$dataSourceName 无法启动后台更新：$reason。请保持 App 在前台后重试。",
+                    dataSourceName,
+                )
+            }
+    }
+
     fun smartUpdateData() {
         selectedTab = AppTab.Today
         dataSource = "智能更新"
@@ -242,7 +253,7 @@ fun AStockSelectorApp() {
             val intent = Intent(context, MarketUpdateService::class.java)
                 .putExtra(MarketUpdateService.EXTRA_NEAR_MA_PCT, nearMaPct)
                 .putExtra(MarketUpdateService.EXTRA_MIN_AMOUNT, minAmount)
-            context.startForegroundService(intent)
+            startMarketUpdateService(intent, "智能更新")
         }
     }
 
@@ -257,7 +268,7 @@ fun AStockSelectorApp() {
             .putExtra(MarketUpdateService.EXTRA_NEAR_MA_PCT, nearMaPct)
             .putExtra(MarketUpdateService.EXTRA_MIN_AMOUNT, minAmount)
             .putExtra(MarketUpdateService.EXTRA_REBUILD_CACHE, true)
-        context.startForegroundService(intent)
+        startMarketUpdateService(intent, "重建缓存")
     }
 
     fun refreshCacheInfo() {
@@ -1065,7 +1076,7 @@ private fun SettingsPage(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "点击后先判断缓存是否为收盘最新数据；已最新且无失败则复用结果，未最新则只更新缺目标交易日、失败或新增股票。",
+                    "点击后先判断缓存是否为收盘最新数据；已最新且无可重试缺口则复用结果，未最新则只更新缺目标交易日、失败或新增股票。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                 )

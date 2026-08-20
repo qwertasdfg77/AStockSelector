@@ -21,8 +21,8 @@ from reportlab.platypus import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION_NAME = "0.3.5"
-VERSION_CODE = 27
+VERSION_NAME = "0.3.6"
+VERSION_CODE = 28
 OUTPUT = ROOT / "docs" / "AStockSelector_PRD.pdf"
 
 pdfmetrics.registerFont(TTFont("YaHei", r"C:\Windows\Fonts\msyh.ttc"))
@@ -243,7 +243,7 @@ story = [
     Paragraph("AStockSelector", styles["CNTitle"]),
     Paragraph("A 股日线策略选股器 · 产品需求文档", styles["CNSubtitle"]),
     Spacer(1, 7 * mm),
-    callout(f"版本：{VERSION_NAME}　Android versionCode：{VERSION_CODE}　文档日期：2026-08-20", LIGHT_GREEN),
+    callout(f"版本：{VERSION_NAME} | Android versionCode：{VERSION_CODE} | 文档日期：2026-08-20", LIGHT_GREEN),
     Spacer(1, 12 * mm),
     body("面向个人自用的纯 Android A 股日线筛选工具。App 在手机端读取公开行情、维护本地 SQLite 缓存，并按六个预设战法生成今日信号。"),
     Spacer(1, 4 * mm),
@@ -277,7 +277,7 @@ story = [
         ["数据", "主源", "备用源", "口径与校验"],
         [
             ["股票列表", "新浪沪深 A 股", "腾讯报价列表", "过滤 ST、退市、无成交和未知板块；主表保留完整有效股票。"],
-            ["日 K", "新浪", "腾讯", "两者均使用未复权价格；腾讯请求 bfq。最新 K 线日期必须精确等于目标收盘日。"],
+            ["日 K", "新浪", "腾讯", "主源请求失败、空数据或日期不合格时切备用源；两者均使用未复权价格，且最新日期必须精确等于目标收盘日。"],
             ["成交额", "列表当前成交额", "列表当前成交额", "只写入最新一条 K 线；历史日 K 成交额为 0，不伪造历史值。"],
         ],
         [28 * mm, 34 * mm, 34 * mm, 78 * mm],
@@ -290,6 +290,7 @@ story = [
     bullet("本地日期落后时，先用 8 只固定样本读取少量 K 线，确认节假日和数据源实际最新日。"),
     bullet("目标交易日解析结果缓存 30 分钟；普通刷新不续期，到期后会重新探测。"),
     bullet("已有完整股票只补最近 40 个交易日；新增或不足 270 条的股票补约 270 个交易日。"),
+    bullet("单股新浪数据非空但日期未达到目标收盘日时，仍会切换腾讯；主备都不合格才进入失败队列。"),
     bullet("最低成交额下调时，只补新进入门槛范围且缺少最新 K 线的股票。"),
     bullet("连续失败会提前停止请求，但已尝试和未执行股票都写入失败队列。"),
     bullet("同一股票达到当天失败上限后暂停重试；覆盖率只统计当前成交额门槛内股票。"),
@@ -326,13 +327,15 @@ story = [
     h1("4. 后台、更新与安全"),
     h2("4.1 后台行情任务"),
     bullet("用户点击后启动 dataSync 类型前台服务，通知栏显示阶段、进度和预计剩余时间。"),
+    bullet("进度通知最多每秒刷新一次；阶段切换和最终状态立即更新，避免触发 Android 通知限流。"),
     bullet("任务期间持有最长 2 小时 PARTIAL_WAKE_LOCK，并提供忽略电池优化设置入口。"),
     bullet("服务使用 START_NOT_STICKY；任务状态丢失后不会按默认参数意外重新启动。"),
     callout("前台服务和电池优化豁免只能降低被清理概率，不能承诺任何 Android 厂商系统都绝不终止进程。", LIGHT_AMBER),
     h2("4.2 App 内更新"),
-    bullet("界面只显示三段式版本号，例如 0.3.5；versionCode 仅用于内部新旧比较。"),
+    bullet(f"界面只显示三段式版本号，例如 {VERSION_NAME}；versionCode 仅用于内部新旧比较。"),
     bullet("latest.json 必须包含版本、HTTPS 地址、APK SHA256、大小和更新说明。"),
     bullet("下载最多重试 3 次，中断或失败会清理 .part 和损坏 APK。"),
+    bullet("元数据中的 APK 大小不得超过 256 MiB；响应长度和流式下载字节数超出预期时立即终止并清理临时文件。"),
     bullet("大小及 SHA256 通过后才打开 Android 系统安装器。"),
     h2("4.3 发布安全"),
     data_table(

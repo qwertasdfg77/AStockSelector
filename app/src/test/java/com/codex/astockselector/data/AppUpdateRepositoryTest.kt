@@ -71,6 +71,17 @@ class AppUpdateRepositoryTest {
     }
 
     @Test
+    fun validateUpdateInfoRejectsUnreasonablyLargeApk() {
+        val update = validUpdateInfo().copy(
+            apkSize = AppUpdateRepository.MAX_UPDATE_APK_SIZE_BYTES + 1L,
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            AppUpdateRepository.validateUpdateInfo(update)
+        }
+    }
+
+    @Test
     fun verifyDownloadedApkReturnsShaWhenSizeAndHashMatch() {
         val apk = writeTempApk("release-apk")
         val update = validUpdateInfo(

@@ -34,9 +34,9 @@ AStockSelector 是一个 Android 端 A 股日线策略筛选工具，用于学�
 
 先检查手机能否访问 GitHub Raw 链接。如果网络不可用，可以直接到 [GitHub Releases](https://github.com/qwertasdfg77/AStockSelector/releases/latest) 下载 APK。
 
-## 为什么 Release 里可能有 debug APK？
+## 为什么旧 Release 里可能有 debug APK？
 
-debug APK 方便开源项目快速安装测试，但不是正式发布签名包。仓库已提供正式签名 APK 的配置方式，只有项目维护者配置私有 keystore secrets 后，自动 Release 才会生成正式签名 APK。
+早期历史 Release 曾同时保留 debug APK 供测试，因此旧页面里仍可能看到它。当前发布流程只提供正式签名的 release APK；普通用户不应安装历史 debug APK。
 
 ## 缓存会占很多空间吗？
 

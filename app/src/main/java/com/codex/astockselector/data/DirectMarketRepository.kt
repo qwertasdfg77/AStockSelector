@@ -11,6 +11,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -57,6 +58,7 @@ data class MarketCacheStockCandidate(
 data class MarketCacheUpdateTarget(
     val candidate: MarketCacheStockCandidate,
     val days: Int,
+    val expectedTradeDate: String = "",
 )
 
 data class MarketCacheUpdateFailure(
@@ -151,7 +153,8 @@ object DirectMarketRepository {
                                     success.incrementAndGet()
                                     StrategyEngine.evaluate(stock.profile, result.bars, config)
                                 }
-                            } catch (_: Exception) {
+                            } catch (error: Exception) {
+                                error.rethrowIfCancellation()
                                 failed.incrementAndGet()
                                 emptyList()
                             } finally {
@@ -238,7 +241,7 @@ object DirectMarketRepository {
                         .map { it.tradeDate }
                         .filter { it <= maxExpectedDate }
                         .maxOrNull()
-                }.getOrNull()
+                }.onFailure { it.rethrowIfCancellation() }.getOrNull()
                 if (!latest.isNullOrBlank()) {
                     detectedDates += latest
                 }
@@ -286,7 +289,11 @@ object DirectMarketRepository {
                             val target = targets[index]
                             val stock = target.candidate.toDirectStock()
                             try {
-                                val barResult = loadCacheBarsWithFallback(stock, target.days)
+                                val barResult = loadCacheBarsWithFallback(
+                                    stock = stock,
+                                    days = target.days,
+                                    expectedTradeDate = target.expectedTradeDate,
+                                )
                                 val bars = barResult.bars
                                 if (bars.isEmpty()) {
                                     failed.incrementAndGet()
@@ -310,6 +317,7 @@ object DirectMarketRepository {
                                     )
                                 }
                             } catch (error: Exception) {
+                                error.rethrowIfCancellation()
                                 val message = error.message ?: error::class.java.simpleName
                                 lastError.compareAndSet("", message)
                                 failed.incrementAndGet()
@@ -383,6 +391,7 @@ object DirectMarketRepository {
             }
             StockListLoadResult(stocks, "sina")
         } catch (error: Exception) {
+            error.rethrowIfCancellation()
             emit(onProgress, "新浪列表读取失败：${error.message ?: "未知错误"}。正在尝试腾讯报价备用列表...")
             val stocks = loadTencentQuoteStocks(onProgress)
             if (!isPlausibleStockListSize(stocks.size)) {
@@ -498,7 +507,7 @@ object DirectMarketRepository {
         val sinaResult = runCatching {
             waitBeforeStockRequest()
             BarLoadResult(loadSinaBars(stock), MarketSource.SINA)
-        }.getOrNull()
+        }.onFailure { it.rethrowIfCancellation() }.getOrNull()
         if (sinaResult != null && sinaResult.bars.size >= 260) {
             return sinaResult
         }
@@ -508,30 +517,56 @@ object DirectMarketRepository {
         return BarLoadResult(tencentBars, MarketSource.TENCENT)
     }
 
-    private suspend fun loadCacheBarsWithFallback(stock: DirectStock, days: Int): BarLoadResult {
-        var sinaError: Throwable? = null
+    private suspend fun loadCacheBarsWithFallback(
+        stock: DirectStock,
+        days: Int,
+        expectedTradeDate: String = "",
+    ): BarLoadResult {
+        var sinaFailure = "返回空数据"
         val sinaResult = runCatching {
             waitBeforeCacheUpdateRequest()
             BarLoadResult(loadSinaBars(stock, days), MarketSource.SINA)
         }.onFailure { error ->
-            sinaError = error
+            error.rethrowIfCancellation()
+            sinaFailure = error.message ?: "请求失败"
         }.getOrNull()
-        if (sinaResult != null && sinaResult.bars.isNotEmpty()) {
-            return sinaResult
+        if (sinaResult != null) {
+            if (hasExpectedLatestTradeDate(sinaResult.bars, expectedTradeDate)) {
+                return sinaResult
+            }
+            sinaFailure = sinaResult.bars.latestDateFailure(expectedTradeDate)
         }
 
         val tencentResult = runCatching {
             waitBeforeCacheUpdateRequest()
             BarLoadResult(loadTencentBars(stock, days), MarketSource.TENCENT)
         }.getOrElse { tencentError ->
+            tencentError.rethrowIfCancellation()
             throw IllegalStateException(
-                "新浪K线${sinaError?.message ?: "返回空数据"}；腾讯K线${tencentError.message ?: "请求失败"}",
+                "新浪K线$sinaFailure；腾讯K线${tencentError.message ?: "请求失败"}",
             )
         }
-        if (tencentResult.bars.isEmpty()) {
-            throw IllegalStateException("新浪K线${sinaError?.message ?: "返回空数据"}；腾讯K线返回空数据")
+        if (!hasExpectedLatestTradeDate(tencentResult.bars, expectedTradeDate)) {
+            throw IllegalStateException(
+                "新浪K线$sinaFailure；腾讯K线${tencentResult.bars.latestDateFailure(expectedTradeDate)}",
+            )
         }
         return tencentResult
+    }
+
+    internal fun hasExpectedLatestTradeDate(bars: List<DailyBar>, expectedTradeDate: String): Boolean =
+        bars.isNotEmpty() && (
+            expectedTradeDate.isBlank() || bars.last().tradeDate == expectedTradeDate
+        )
+
+    private fun List<DailyBar>.latestDateFailure(expectedTradeDate: String): String {
+        val latestDate = lastOrNull()?.tradeDate.orEmpty()
+        return when {
+            latestDate.isBlank() -> "返回空数据"
+            expectedTradeDate.isBlank() -> "返回数据不可用"
+            latestDate > expectedTradeDate -> "最新日期 $latestDate 超出目标 $expectedTradeDate"
+            else -> "最新日期 $latestDate 未达到目标 $expectedTradeDate"
+        }
     }
 
     private suspend fun loadSinaBars(stock: DirectStock, days: Int = 280): List<DailyBar> {
@@ -668,6 +703,7 @@ object DirectMarketRepository {
                     lastError = IllegalStateException("HTTP ${response.code}")
                 }
             } catch (error: Exception) {
+                error.rethrowIfCancellation()
                 lastError = error
             }
             if (attempt < RETRY_COUNT - 1) {
@@ -774,6 +810,10 @@ object DirectMarketRepository {
         withContext(Dispatchers.Main.immediate) {
             onProgress(message)
         }
+    }
+
+    private fun Throwable.rethrowIfCancellation() {
+        if (this is CancellationException) throw this
     }
 
     private fun marketFromCode(code: String, symbol: String): MarketSegment =
