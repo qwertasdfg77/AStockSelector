@@ -60,6 +60,13 @@ def main() -> None:
                     snippet = snippet[:177] + "..."
                 failures.append(f"{rel_path}:{line_no}: possible mojibake: {snippet}")
 
+        if path.name.startswith("release-v") and path.suffix == ".md":
+            for stale_link in ("](install.md)", "](signing-release.md)"):
+                if stale_link in text:
+                    failures.append(
+                        f"{rel_path}: release notes must use an absolute GitHub docs link, found {stale_link}"
+                    )
+
     if failures:
         print("Document text check failed:", file=sys.stderr)
         for failure in failures:

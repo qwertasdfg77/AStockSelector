@@ -14,13 +14,13 @@
 3. 如果系统提示未知来源，允许当前浏览器或文件管理器安装。
 4. 首次打开 App 后，点击“智能更新并筛选”。
 
-详细说明见：[docs/install.md](install.md)
+详细说明见：[docs/install.md](https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/install.md)
 
 ## 当前 APK 类型
 
 当前优先发布正式签名 release APK。Release 中也会保留 debug APK，用于开源测试。
 
-签名说明见：[docs/signing-release.md](signing-release.md)
+签名说明见：[docs/signing-release.md](https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/signing-release.md)
 
 ## 主要变化
 

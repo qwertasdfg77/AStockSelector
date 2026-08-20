@@ -15,7 +15,7 @@
 3. 如果系统提示未知来源，允许当前浏览器或文件管理器安装。
 4. 首次打开 App 后，点击“智能更新并筛选”。
 
-详细说明见：[docs/install.md](install.md)
+详细说明见：[docs/install.md](https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/install.md)
 
 ## 当前 APK 类型
 
@@ -23,7 +23,7 @@
 
 正式签名 APK 流程已经在仓库中预留。维护者配置 GitHub Secrets 后，后续 tag 发布会自动生成 `release APK`、`SHA256SUMS.txt`、`BUILD_INFO.txt` 和签名报告。
 
-签名说明见：[docs/signing-release.md](signing-release.md)
+签名说明见：[docs/signing-release.md](https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/signing-release.md)
 
 ## 主要变化
 

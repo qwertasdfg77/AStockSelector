@@ -63,6 +63,8 @@ required_snippets = {
     f"docs/release-v{version_name}.md": [
         f"# AStockSelector {version_name}",
         f"v{version_name}",
+        "https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/install.md",
+        "https://github.com/qwertasdfg77/AStockSelector/blob/main/docs/signing-release.md",
     ],
     "scripts/generate-prd.py": [
         f'VERSION_NAME = "{version_name}"',
