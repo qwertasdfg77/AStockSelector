@@ -24,19 +24,25 @@ object StrategyEngine {
         bars: List<DailyBar>,
         config: StrategyConfig = StrategyConfig(),
     ): List<StrategySignal> {
-        if (stock.isSt || bars.size < 260) return emptyList()
+        if (stock.isSt || bars.size < ResearchStrategyEngine.MIN_HISTORY) return emptyList()
 
         val sorted = bars.sortedBy { it.tradeDate }
         if (sorted.last().amount < config.minAmount) return emptyList()
-        val enriched = enrich(sorted)
-        return listOfNotNull(
-            evaluateFirstBoard(stock, enriched, config),
-            evaluateNineYang(stock, enriched, config),
-            evaluateGameKLine(stock, enriched, config),
-            evaluateLowLevelStart(stock, sorted, enriched, config),
-            evaluateBuildThreeYang(stock, sorted, enriched),
-            evaluateLiftThreeYang(stock, sorted, enriched),
-        ).sortedWith(compareByDescending<StrategySignal> { it.level.ordinal * -1 }.thenByDescending { it.score })
+        val legacySignals = if (sorted.size >= 260) {
+            val enriched = enrich(sorted)
+            listOfNotNull(
+                evaluateFirstBoard(stock, enriched, config),
+                evaluateNineYang(stock, enriched, config),
+                evaluateGameKLine(stock, enriched, config),
+                evaluateLowLevelStart(stock, sorted, enriched, config),
+                evaluateBuildThreeYang(stock, sorted, enriched),
+                evaluateLiftThreeYang(stock, sorted, enriched),
+            )
+        } else {
+            emptyList()
+        }
+        return (legacySignals + ResearchStrategyEngine.evaluate(stock, sorted, config))
+            .sortedWith(compareByDescending<StrategySignal> { it.level.ordinal * -1 }.thenByDescending { it.score })
     }
 
     private fun enrich(bars: List<DailyBar>): List<EnrichedBar> {
