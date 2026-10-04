@@ -4,6 +4,8 @@ README 和 GitHub Pages 已使用 App 真实运行截图。后续如果界面变
 
 ## 当前截图
 
+- `strategy-options-v0.3.7.png`：0.3.7 正式签名 APK，Android 15 模拟器实测，展示九个战法及新增选项未自动勾选。
+- 下列三张图片保留较早版本的真实手机截图，不代表 0.3.7 的全部新增选项。
 - `today-signals.png`：今日信号页面。
 - `settings-strategy.png`：设置页的策略参数区域。
 - `settings-update.png`：设置页的数据更新与筛选区域。

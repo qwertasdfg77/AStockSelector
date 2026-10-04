@@ -75,6 +75,7 @@ import com.codex.astockselector.data.MarketUpdateStore
 import com.codex.astockselector.data.SignalSnapshotPolicy
 import com.codex.astockselector.model.SignalLevel
 import com.codex.astockselector.model.StrategyConfig
+import com.codex.astockselector.model.StrategyOption
 import com.codex.astockselector.model.StrategySignal
 import com.codex.astockselector.model.strategyRuleKey
 import com.codex.astockselector.service.MarketUpdateService
@@ -461,18 +462,6 @@ private enum class AppTab(val title: String) {
     Settings("设置"),
 }
 
-private enum class StrategyOption(
-    val title: String,
-    val strategyName: String,
-) {
-    FirstBoard("年线首板", "年线首板"),
-    NineYang("九阳蓄势", "九阳蓄势"),
-    GameKLine("博弈K", "博弈K"),
-    LowLevelStart("低位启动", "低位启动"),
-    BuildThreeYang("建仓三阳", "建仓三阳"),
-    LiftThreeYang("拉升三阳", "拉升三阳"),
-}
-
 private fun List<StrategySignal>.filterByStrategies(options: Set<StrategyOption>): List<StrategySignal> {
     val selectedOptions = StrategyOption.entries.filter { it in options }
     val selectedStrategies = selectedOptions.map { it.strategyName }.toSet()
@@ -672,12 +661,7 @@ private fun loadSelectedStrategies(context: Context): Set<StrategyOption> {
     val saved = context
         .getSharedPreferences(STRATEGY_PREFS_NAME, Context.MODE_PRIVATE)
         .getStringSet(STRATEGY_PREFS_KEY, null)
-        ?: return StrategyOption.entries.toSet()
-
-    val options = saved.mapNotNull { name ->
-        StrategyOption.entries.firstOrNull { it.name == name }
-    }.toSet()
-    return options.ifEmpty { StrategyOption.entries.toSet() }
+    return StrategyOption.fromSavedNames(saved)
 }
 
 private fun saveSelectedStrategies(context: Context, options: Set<StrategyOption>) {

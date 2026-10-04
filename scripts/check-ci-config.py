@@ -49,6 +49,31 @@ def release_workflow_text() -> str:
     return (ROOT / ".github" / "workflows" / "release-apk.yml").read_text(encoding="utf-8")
 
 
+def require_android_sdk_packages(workflows: dict[str, dict]) -> None:
+    build = (ROOT / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    compile_sdk = re.search(r"compileSdk\s*=\s*(\d+)", build)
+    if compile_sdk is None:
+        fail("app/build.gradle.kts must define compileSdk")
+    platform = f"platforms;android-{compile_sdk.group(1)}"
+    for name in ["android-ci.yml", "codeql.yml", "release-apk.yml"]:
+        steps = [
+            step
+            for job in workflows[name].get("jobs", {}).values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("android-actions/setup-android@")
+        ]
+        if not steps:
+            fail(f"{name} must explicitly set up Android SDK packages")
+        for step in steps:
+            packages = str(step.get("with", {}).get("packages", "")).split()
+            if "tools" in packages:
+                fail(f"{name} must not install the obsolete tools package")
+            if "platform-tools" not in packages or platform not in packages:
+                fail(f"{name} must install platform-tools and {platform}")
+            if not any(package.startswith("build-tools;") for package in packages):
+                fail(f"{name} must explicitly install Android build tools")
+
+
 def check_release_only_uploads_release_apk() -> None:
     text = release_workflow_text()
     forbidden = [
@@ -119,6 +144,7 @@ def main() -> None:
     compile_python_scripts()
     workflows = parse_workflows()
     require_concurrency(workflows)
+    require_android_sdk_packages(workflows)
     check_release_only_uploads_release_apk()
     require_document_text_scan()
     require_pinned_actions()

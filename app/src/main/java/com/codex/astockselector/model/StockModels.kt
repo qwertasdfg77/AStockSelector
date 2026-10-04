@@ -74,7 +74,7 @@ data class RuleCheck(
     val passed: Boolean,
 )
 
-const val SIGNAL_RULE_VERSION = "20260820_three_yang_balanced_v2"
+const val SIGNAL_RULE_VERSION = "20261004_research_three_v1"
 
 fun StrategyConfig.strategyRuleKey(): String =
     listOf(

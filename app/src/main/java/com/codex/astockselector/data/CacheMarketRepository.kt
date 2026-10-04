@@ -11,6 +11,7 @@ import com.codex.astockselector.model.StrategyConfig
 import com.codex.astockselector.model.StrategySignal
 import com.codex.astockselector.model.strategyRuleKey
 import com.codex.astockselector.strategy.StrategyEngine
+import com.codex.astockselector.strategy.ResearchStrategyEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -1244,6 +1245,17 @@ object CacheMarketRepository {
     }
 
     private fun isCoarseCandidate(
+        stock: StockProfile,
+        bars: List<DailyBar>,
+        config: StrategyConfig,
+    ): Boolean {
+        if (stock.isSt || bars.size < ResearchStrategyEngine.MIN_HISTORY) return false
+        if (bars.last().amount < config.minAmount) return false
+        if (ResearchStrategyEngine.isCoarseCandidate(bars)) return true
+        return isLegacyCoarseCandidate(stock, bars, config)
+    }
+
+    private fun isLegacyCoarseCandidate(
         stock: StockProfile,
         bars: List<DailyBar>,
         config: StrategyConfig,

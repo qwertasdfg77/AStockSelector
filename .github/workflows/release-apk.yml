@@ -30,6 +30,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
@@ -185,7 +188,6 @@ jobs:
 
           UPDATE_SHA="$(sha256sum "$UPDATE_APK" | awk '{print $1}')"
           UPDATE_SIZE="$(wc -c < "$UPDATE_APK" | tr -d ' ')"
-          RELEASE_NOTES="AStockSelector ${VERSION_NAME}：请查看 GitHub Release 页面获取完整中文说明。"
 
           git clone "https://x-access-token:${ASTOCK_UPDATES_TOKEN}@github.com/qwertasdfg77/astock-selector-updates.git" update-server
           cp update-server/latest.json previous-latest.json
@@ -194,13 +196,18 @@ jobs:
           import json
           from pathlib import Path
 
+          release_doc = Path("docs/release-v${VERSION_NAME}.md").read_text(encoding="utf-8")
+          changes = release_doc.split("## 主要变化", 1)[1].split("## ", 1)[0]
+          notes = [line[2:] for line in changes.splitlines() if line.startswith("- ")]
+          if not notes:
+              raise SystemExit("Release notes must describe this update")
           data = {
               "versionCode": int("${VERSION_CODE}"),
               "versionName": "${VERSION_NAME}",
               "apkUrl": "https://raw.githubusercontent.com/qwertasdfg77/astock-selector-updates/main/${UPDATE_FILE}",
               "apkSha256": "${UPDATE_SHA}",
               "apkSize": int("${UPDATE_SIZE}"),
-              "releaseNotes": "${RELEASE_NOTES}",
+              "releaseNotes": "\n".join(notes),
           }
           Path("update-server/latest.json").write_text(
               json.dumps(data, ensure_ascii=False, indent=2) + "\n",
